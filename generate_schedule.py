@@ -20,8 +20,6 @@ import os
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, PatternFill, Border, Side
 
-# …その他 import …
-
 
 def run(schedule_input, emp_input, config_path=None):
     """
@@ -30,31 +28,33 @@ def run(schedule_input, emp_input, config_path=None):
     """
     # 1) pandas で読み込む
     if hasattr(schedule_input, "read"):
-        # Streamlit の UploadedFile
-        sched_df = pd.read_csv(schedule_input)
+        schedule_df = pd.read_csv(schedule_input, header=None, dtype=str).fillna("")
     else:
-        sched_df = pd.read_csv(schedule_input)
+        schedule_df = pd.read_csv(schedule_input, header=None, dtype=str).fillna("")
 
     if hasattr(emp_input, "read"):
-        emp_df = pd.read_csv(emp_input)
+        emp_df = pd.read_csv(emp_input, header=None, dtype=str).fillna("")
     else:
-        emp_df = pd.read_csv(emp_input)
+        emp_df = pd.read_csv(emp_input, header=None, dtype=str).fillna("")
 
     # 2) 既存の整形処理をここで実行
-    #    （今まで generate_schedule.py で書いていた処理を、すべてこの関数内に移動してください）
-    #   例: header 検出 → df 出力 → Excel 書き込み ...
+    #    （従来 generate_schedule.py で書いていた処理をすべてこの run 内に移動）
+    #    例: ヘッダー検出 → データ整形 → Excel 書き込み など
 
     # 3) 出力ファイルを保存
     out_csv = "formatted_schedule.csv"
     out_xlsx = "formatted_schedule.xlsx"
-    # sched_df.to_csv(out_csv, index=False)
-    # …Excel 保存ロジック…
+    # schedule_df.to_csv(out_csv, index=False)
+    # <Excel 保存ロジック>
 
-    return out_csv, out_xlsx  # 戻り値としてパスを返す
+    return out_csv, out_xlsx
 
 
 if __name__ == "__main__":
     # コマンドライン実行時の既存挙動を保持
+    # BASE_DIR = os.getcwd()
+    # SCHEDULE_CSV = os.path.join(BASE_DIR, "schedule.csv")
+    # EMP_CSV      = os.path.join(BASE_DIR, "emp_no.csv")
     run("schedule.csv", "emp_no.csv")
 
 # ==== 固定パス設定 ====
@@ -299,3 +299,6 @@ def write_to_excel(records, output_path):
 excel_path = os.path.join(BASE_DIR, "blocks_output.xlsx")
 write_to_excel(records, excel_path)
 print(f"Excel schedule written to {excel_path}")
+if __name__ == "__main__":
+    # ここだけが直接実行されたときに動く
+    run("schedule.csv", "emp_no.csv")
