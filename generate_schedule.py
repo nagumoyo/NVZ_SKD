@@ -4,11 +4,10 @@ import os
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, PatternFill, Border, Side
 
-# ==== ヘルパー関数群 ====
 
+# ==== ヘルパー関数群 ====
 def clean_cell(text):
     s = str(text)
-    # 不可視文字除去
     s = re.sub(r"[\u200b\u200c\u200d\u2060\uFEFF\u00A0\t\r\n]", "", s)
     return s.strip()
 
@@ -30,20 +29,18 @@ def find_header_rows(df):
 
 
 def find_date_row(df, start_idx):
-    """
-    ヘッダー行 start_idx の次の行から、日付行（01～31の数字のみが並ぶ行）を探して返す
-    """
     for i in range(start_idx + 1, len(df)):
         vals = [clean_cell(x) for x in df.iloc[i].tolist()]
-        # 2文字以下の数字列が先頭31列に並ぶなら日付行と判断
         date_cells = vals[:31]
-        if all(re.fullmatch(r"\d{1,2}", v) or v == "" for v in date_cells) and any(re.fullmatch(r"\d{1,2}", v) for v in date_cells):
+        if all((re.fullmatch(r"\d{1,2}", v) or v == "") for v in date_cells) and any(
+            re.fullmatch(r"\d{1,2}", v) for v in date_cells
+        ):
             return i
     raise IndexError(f"Date row not found after header at row {start_idx}")
 
 
 def reshape_block(df, h, d, e):
-    # ヘッダー行の整形
+    # ヘッダー行
     raw_hdr = [clean_cell(x) for x in df.iloc[h].tolist()]
     transformed = []
     for col in raw_hdr:
@@ -99,30 +96,39 @@ def write_to_excel(records, output_path):
         # ヘッダー
         for ci, val in enumerate(rec["hdr"], start=1):
             cell = ws.cell(row_idx, ci, val)
-            cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+            cell.alignment = Alignment(
+                horizontal="left", vertical="top", wrap_text=True
+            )
             cell.border = double_border
         row_idx += 1
         # 日付行
         for ci, val in enumerate(rec["dr"], start=1):
             cell = ws.cell(row_idx, ci, val)
-            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.alignment = Alignment(
+                horizontal="center", vertical="center", wrap_text=True
+            )
             cell.fill = grey_fill
         row_idx += 1
-        # スケジュール
+        # スケジュール行
         for sched_row in rec["sched"]:
             for ci, val in enumerate(sched_row, start=1):
                 cell = ws.cell(row_idx, ci, val)
-                cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+                cell.alignment = Alignment(
+                    horizontal="left", vertical="top", wrap_text=True
+                )
             row_idx += 1
-        # 同乗者
+        # 同乗者行
         for ci, val in enumerate(rec["onb"], start=1):
             cell = ws.cell(row_idx, ci, val)
-            cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+            cell.alignment = Alignment(
+                horizontal="left", vertical="top", wrap_text=True
+            )
             if "*" in val:
                 cell.fill = highlight_fill
         row_idx += 1
 
     wb.save(output_path)
+
 
 # ==== エントリポイント ====
 def run(schedule_input, emp_input, config_path=None):
@@ -137,7 +143,7 @@ def run(schedule_input, emp_input, config_path=None):
     else:
         emp_df = pd.read_csv(emp_input, header=None, dtype=str).fillna("")
 
-    # emp_df をグローバル変数に設定
+    # グローバル変数設定
     global emp_df_global
     emp_df_global = emp_df
 
@@ -146,15 +152,11 @@ def run(schedule_input, emp_input, config_path=None):
     headers = find_header_rows(df)
     records = []
     for i, h in enumerate(headers):
-        # 次ヘッダーの行位置
-        next_h = headers[i+1] if i+1 < len(headers) else len(df)
-        # 日付行検出、見つからない場合はスキップ
+        next_h = headers[i + 1] if i + 1 < len(headers) else len(df)
         try:
             d = find_date_row(df, h)
         except IndexError:
-            # デバッグ: 日付行が見つからないヘッダーをスキップ
             continue
-        # ブロック整形
         records.append(reshape_block(df, h, d, next_h))
 
     # 3) CSV 出力
@@ -170,16 +172,14 @@ def run(schedule_input, emp_input, config_path=None):
 
     return out_csv, out_xlsx
 
+
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="スケジュール整形ツール CLI")
-    parser.add_argument("--schedule", default="schedule.csv", help="スケジュールCSVのパス")
-    parser.add_argument("--emp",      default="emp_no.csv",   help="職員番号CSVのパス")
-    args = parser.parse_args()
-    run(args.schedule, args.emp) == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="スケジュール整形ツール CLI")
-    parser.add_argument("--schedule", default="schedule.csv", help="スケジュールCSVのパス")
-    parser.add_argument("--emp",      default="emp_no.csv",   help="職員番号CSVのパス")
+    parser.add_argument(
+        "--schedule", default="schedule.csv", help="スケジュールCSVのパス"
+    )
+    parser.add_argument("--emp", default="emp_no.csv", help="職員番号CSVのパス")
     args = parser.parse_args()
     run(args.schedule, args.emp)
