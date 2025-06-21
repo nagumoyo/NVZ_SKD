@@ -1,3 +1,9 @@
+import pandas as pd
+import re
+import os
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, PatternFill, Border, Side
+
 """
 generate_schedule_fixed_rev9.py
 
@@ -11,34 +17,7 @@ Revision History:
 - Rev7: 電話番号セルの折り返し無効化＆日付行背景色設定
 - Rev8: ヘッダー行書式調整（左寄せ・上下二重罫線）
 - Rev9: 同乗者の所属一致時に*付与、*付き同乗者をExcelでハイライト
-
 """
-
-import pandas as pd
-import re
-import os
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, PatternFill, Border, Side
-
-
-def run(schedule_input, emp_input, config_path=None):
-    """
-    Streamlit から呼び出されるエントリポイント。
-    schedule_input, emp_input はファイルパス文字列または file-like オブジェクト(Uploader)のどちらでも可。
-    """
-    # 1) pandas で読み込む
-    if hasattr(schedule_input, "read"):
-        schedule_df = pd.read_csv(schedule_input, header=None, dtype=str).fillna("")
-    else:
-        schedule_df = pd.read_csv(schedule_input, header=None, dtype=str).fillna("")
-
-    if hasattr(emp_input, "read"):
-        emp_df = pd.read_csv(emp_input, header=None, dtype=str).fillna("")
-    else:
-        emp_df = pd.read_csv(emp_input, header=None, dtype=str).fillna("")
-
-    # 2) 既存の整形処理をここで実行
-    #    （従来 generate_schedule.py で書いていた処理をすべてこの run 内に移動）
 
 
 # ==== DataFrame読み込み & セルクリーニング ====
@@ -48,68 +27,41 @@ def clean_cell(text):
     return s.strip()
 
 
-schedule_df = pd.read_csv(SCHEDULE_CSV, header=None, dtype=str).fillna("")
-emp_df = pd.read_csv(EMP_CSV, header=None, dtype=str).fillna("")
-
-# ==== 職員情報整形 ====
-emp_df.columns = [f"col_{i+1}" for i in range(emp_df.shape[1])]
-emp_df["emp_no"] = emp_df["col_3"].str.zfill(5)
-emp_df["full_name"] = emp_df["col_5"].apply(clean_cell) + emp_df["col_7"].apply(
-    clean_cell
-)
-emp_df = emp_df.reset_index().rename(columns={"index": "sort_idx"})
-
-
-# ==== 前処理関数 ====
 def remove_blank_and_ob(df):
-    df1 = df[
-        ~df.apply(
-            lambda r: bool(re.search(r"00099\d{3}", "".join(r.astype(str)))), axis=1
-        )
-    ]
-    for i, row in df1.iterrows():
-        if re.match(r"^[A-Z]+[O0]B$", clean_cell(row.iat[0])):
-            df1 = df1.iloc[:i]
-            break
-    df2 = df1[~df1.apply(lambda r: all(clean_cell(c) == "" for c in r), axis=1)]
-    return df2.reset_index(drop=True)
+    # OB(欠員)行・空行を削除
+    mask = []
+    for _, row in df.iterrows():
+        row_str = "".join(row.tolist())
+        mask.append(bool(re.search(r"[01]\-\d{2}\.\d{2}|OB", row_str)))
+    return df[mask].reset_index(drop=True)
 
 
-# ==== ヘッダー検出 ====
 def find_header_rows(df):
-    idxs = []
-    for i in range(len(df) - 1):
-        first = clean_cell(df.iat[i, 0])
-        if not re.match(r"^[A-Z]{2,}$", first):
-            continue
-        nxt = df.iloc[i + 1]
-        cnt = sum(
-            bool(re.match(r"^(0?[1-9]|[12][0-9]|3[01])$", clean_cell(c))) for c in nxt
-        )
-        if cnt >= 25:
-            idxs.append(i)
-    return idxs
+    # 1列目が2文字以上大文字英字の行をヘッダー行とみなす
+    hdrs = []
+    for idx, row in df.iterrows():
+        if re.match(r"^[A-Z]{2,}$", str(row.iloc[0])):
+            hdrs.append(idx)
+    return hdrs
 
 
-schedule_df = remove_blank_and_ob(schedule_df)
-headers = find_header_rows(schedule_df)
-
-
-# ==== ブロック切り出し ====
 def slice_blocks(df, hdrs):
+    # 各ヘッダー行から次のヘッダー行までをひとブロックとする
     blocks = []
     n = len(df)
-    for idx, h in enumerate(hdrs):
-        nxt = hdrs[idx + 1] if idx + 1 < len(hdrs) else n
+    for i, h in enumerate(hdrs):
+        nxt = hdrs[i + 1] if i + 1 < len(hdrs) else n
         blocks.append((h, h + 1, nxt))
     return blocks
 
 
-blocks = slice_blocks(schedule_df, headers)
-
-
-# ==== ブロック整形 ====
 def reshape_block(df, h, d, e):
+    """
+    df: 全体DataFrame
+    h: ヘッダー行 idx, d: 日付行 idx, e: 次ヘッダー行 idx（終端）
+    emp_df: モジュールグローバルから参照
+    """
+    # ヘッダー行のクレンジング＆変換
     raw_hdr = [clean_cell(x) for x in df.iloc[h].tolist()]
     hdr_items = [col for col in raw_hdr if col]
     transformed = []
@@ -125,171 +77,143 @@ def reshape_block(df, h, d, e):
         else:
             transformed.append(col)
     hdr31 = transformed[:31] + [""] * (31 - len(transformed))
-    raw_dates = [clean_cell(x) for x in df.iloc[d].tolist()]
-    date_cols = [
-        i
-        for i, x in enumerate(raw_dates)
-        if re.match(r"^(0?[1-9]|[12][0-9]|3[01])$", x)
-    ]
-    date_cols = date_cols[:31] + [None] * (31 - len(date_cols))
-    dr = [
-        raw_dates[i] if i is not None and i < len(raw_dates) else "" for i in date_cols
-    ]
-    rows = df.iloc[d + 1 : e]
-    raw_cells = [
-        [clean_cell(row[i]) if i is not None else "" for i in date_cols]
-        for _, row in rows.iterrows()
-    ]
-    sched_df = pd.DataFrame(raw_cells)
-    return hdr31, date_cols, dr, sched_df, raw_cells
 
+    # 日付行
+    dr = [clean_cell(x) for x in df.iloc[d].tolist()][:31]
 
-# ==== レコード収集 ====
-seen = set()
-records = []
-for h, d, e in blocks:
-    hdr31, date_cols, dr, sched_df, raw_cells = reshape_block(schedule_df, h, d, e)
-    emp_no = None
-    for cell in hdr31:
-        if m := re.search(r"000(\d{5})", cell):
-            emp_no = m.group(1)
-            break
-    if emp_no and emp_no in seen:
-        continue
-    if emp_no:
-        seen.add(emp_no)
-    sort_key = float("inf")
-    if emp_no:
-        mrow = emp_df[emp_df.emp_no == emp_no]
-        if not mrow.empty:
-            sort_key = int(mrow.iloc[0].sort_idx)
-            hdr31[0] = mrow.iloc[0].full_name
-            col8 = mrow.iloc[0].col_8
-            hdr31[29] = f"PH{col8}" if col8 in ["1", "2", "3"] else col8
-            hdr31[30] = mrow.iloc[0].col_1
-    hdr31[1] = ""
-    merged_sched = [
-        "\n".join([v for v in sched_df.iloc[:, i] if v])
-        for i in range(sched_df.shape[1])
-    ]
-    raw_cols = []
-    for idx_col in range(len(date_cols)):
-        col_vals = [
-            row[idx_col] for row in raw_cells if idx_col < len(row) and row[idx_col]
-        ]
-        raw_cols.append(col_vals)
-    records.append(
-        {
-            "sort": sort_key,
-            "hdr": hdr31,
-            "dr": dr,
-            "sched": merged_sched,
-            "raw_cols": raw_cols,
-            "onb": [],
-        }
-    )
-records.sort(key=lambda x: x["sort"])
+    # スケジュール行：h+2 から e-1 まで
+    sched = []
+    for ri in range(h + 2, e):
+        sched.append([clean_cell(x) for x in df.iloc[ri].tolist()][:31])
 
-# ==== 同乗者(onb)ロジック（Rev9: 所属一致時に*付与） ====
-for rec in records:
-    own_aff = rec["hdr"][30]
+    # 同乗者行 onb: 列31以降の同乗者名をまとめて改行連結
     merged_onb = []
-    for i, code_str in enumerate(rec["sched"]):
-        if not re.match(r"^\d", code_str) or re.match(r"^\d+DH$", code_str):
-            merged_onb.append("")
-            continue
-        codes = code_str.split("\n")
+    for ri in range(h + 2, e):
         names = []
-        for other in records:
-            if other is rec:
+        for name in [clean_cell(x) for x in df.iloc[ri, 31:].tolist()]:
+            if not name:
                 continue
-            for c in codes:
-                if c in other["raw_cols"][i] and other["hdr"][0] not in [
-                    n.rstrip("*") for n in names
-                ]:
-                    name = other["hdr"][0]
-                    if other["hdr"][30] == own_aff:
-                        name = f"{name}*"
-                    names.append(name)
+            # 同所属に * を付与
+            own_aff = hdr31[2]  # 職番列
+            emp_no = re.sub(r".*?(\d{5})$", r"\1", hdr31[2])
+            # モジュールの emp_df グローバルを使う
+            recs = emp_df[emp_df.iloc[:, 2] == emp_no]
+            if not recs.empty and recs.iloc[0, 3] == recs.iloc[0, 3]:  # 所属照合
+                name = name + "*"
+            names.append(name)
         merged_onb.append("\n".join(names))
-    rec["onb"] = merged_onb
 
-# ==== CSV 出力 ====
-out = []
-for rec in records:
-    out.extend([rec["hdr"], rec["dr"], rec["sched"], rec["onb"]])
-pd.DataFrame(out).to_csv(
-    os.path.join(BASE_DIR, "blocks_output.csv"), header=False, index=False
-)
-print("blocks_output.csv written")
+    return {"hdr": hdr31, "dr": dr, "sched": sched, "onb": merged_onb}
 
 
-# ==== Excel 出力ルーチン (Rev10: *付き同乗者をハイライト) ====
+# ==== Excel 出力ルーチン（Rev9対応） ====
 def write_to_excel(records, output_path):
     wb = Workbook()
     ws = wb.active
     grey_fill = PatternFill(fill_type="solid", fgColor="DDDDDD")
-    highlight_fill = PatternFill(
-        fill_type="solid", fgColor="FFFF00"
-    )  # 黄色でハイライト
+    highlight_fill = PatternFill(fill_type="solid", fgColor="FFFF00")
     double_side = Side(border_style="double", color="000000")
     double_border = Border(top=double_side, bottom=double_side)
-    # 列幅固定設定 (1〜31列)
+
+    # 列幅設定
     for col in range(1, 32):
         ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = 8
+
     row_idx = 1
     for rec in records:
         # ヘッダー行
-        for col_idx, val in enumerate(rec["hdr"], start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=val)
+        for ci, val in enumerate(rec["hdr"], start=1):
+            cell = ws.cell(row_idx, ci, val)
             cell.alignment = Alignment(
-                horizontal="left", vertical="top", wrap_text=False
+                horizontal="left", vertical="top", wrap_text=True
             )
             cell.border = double_border
         row_idx += 1
+
         # 日付行
-        for col_idx, val in enumerate(rec["dr"], start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=val)
+        for ci, val in enumerate(rec["dr"], start=1):
+            cell = ws.cell(row_idx, ci, val)
             cell.alignment = Alignment(
                 horizontal="center", vertical="center", wrap_text=True
             )
             cell.fill = grey_fill
         row_idx += 1
+
         # スケジュール行
-        for col_idx, val in enumerate(rec["sched"], start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=val)
-            cell.alignment = Alignment(
-                horizontal="left", vertical="top", wrap_text=True
-            )
-        row_idx += 1
+        for sched_row in rec["sched"]:
+            for ci, val in enumerate(sched_row, start=1):
+                cell = ws.cell(row_idx, ci, val)
+                cell.alignment = Alignment(
+                    horizontal="left", vertical="top", wrap_text=True
+                )
+            row_idx += 1
+
         # 同乗者行
-        for col_idx, val in enumerate(rec["onb"], start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=val)
+        for ci, val in enumerate(rec["onb"], start=1):
+            cell = ws.cell(row_idx, ci, val)
             cell.alignment = Alignment(
                 horizontal="left", vertical="top", wrap_text=True
             )
             if "*" in val:
                 cell.fill = highlight_fill
         row_idx += 1
+
     wb.save(output_path)
 
-    # 3) 出力ファイルを保存
-    out_csv = "formatted_schedule.csv"
-    out_xlsx = "formatted_schedule.xlsx"
-    # schedule_df.to_csv(out_csv, index=False)
-    # <Excel 保存ロジック>
+
+# ==== エントリポイント ====
+def run(schedule_input, emp_input, config_path=None):
+    """
+    :param schedule_input: ファイルパス(str) または UploadedFile
+    :param emp_input:      ファイルパス(str) または UploadedFile
+    :param config_path:    未使用（将来設定対応用）
+    :return: (out_csv_path, out_xlsx_path)
+    """
+    # --- 1) 読み込み ---
+    if hasattr(schedule_input, "read"):
+        schedule_df_local = pd.read_csv(schedule_input, header=None, dtype=str).fillna(
+            ""
+        )
+    else:
+        schedule_df_local = pd.read_csv(schedule_input, header=None, dtype=str).fillna(
+            ""
+        )
+    if hasattr(emp_input, "read"):
+        emp_df_local = pd.read_csv(emp_input, header=None, dtype=str).fillna("")
+    else:
+        emp_df_local = pd.read_csv(emp_input, header=None, dtype=str).fillna("")
+
+    # モジュール関数内で emp_df を参照できるようにグローバルに設定
+    global emp_df
+    emp_df = emp_df_local
+
+    # --- 2) ブロック生成＆整形 ---
+    df = schedule_df_local.copy().applymap(clean_cell).pipe(remove_blank_and_ob)
+    headers = find_header_rows(df)
+    blocks = slice_blocks(df, headers)
+    records = [reshape_block(df, h, d, e) for h, d, e in blocks]
+
+    # --- 3) CSV 出力 ---
+    out_csv = "blocks_output.csv"
+    out_list = []
+    for rec in records:
+        out_list.extend([rec["hdr"], rec["dr"], rec["sched"], rec["onb"]])
+    pd.DataFrame(out_list).to_csv(out_csv, header=False, index=False)
+
+    # --- 4) Excel 出力 ---
+    out_xlsx = "blocks_output.xlsx"
+    write_to_excel(records, out_xlsx)
 
     return out_csv, out_xlsx
 
 
 if __name__ == "__main__":
-    # コマンドライン実行時の既存挙動を保持
-    # BASE_DIR = os.getcwd()
-    # SCHEDULE_CSV = os.path.join(BASE_DIR, "schedule.csv")
-    # EMP_CSV      = os.path.join(BASE_DIR, "emp_no.csv")
-    run("schedule.csv", "emp_no.csv")
+    import argparse
 
-# ==== 固定パス設定 ====
-# BASE_DIR = os.getcwd()
-# SCHEDULE_CSV = os.path.join(BASE_DIR, "schedule.csv")
-# EMP_CSV = os.path.join(BASE_DIR, "emp_no.csv")
+    parser = argparse.ArgumentParser(description="スケジュール整形ツール CLI")
+    parser.add_argument(
+        "--schedule", default="schedule.csv", help="入力スケジュールCSVのパス"
+    )
+    parser.add_argument("--emp", default="emp_no.csv", help="入力職員番号CSVのパス")
+    args = parser.parse_args()
+    run(args.schedule, args.emp)
