@@ -39,28 +39,6 @@ def run(schedule_input, emp_input, config_path=None):
 
     # 2) 既存の整形処理をここで実行
     #    （従来 generate_schedule.py で書いていた処理をすべてこの run 内に移動）
-    #    例: ヘッダー検出 → データ整形 → Excel 書き込み など
-
-    # 3) 出力ファイルを保存
-    out_csv = "formatted_schedule.csv"
-    out_xlsx = "formatted_schedule.xlsx"
-    # schedule_df.to_csv(out_csv, index=False)
-    # <Excel 保存ロジック>
-
-    return out_csv, out_xlsx
-
-
-if __name__ == "__main__":
-    # コマンドライン実行時の既存挙動を保持
-    # BASE_DIR = os.getcwd()
-    # SCHEDULE_CSV = os.path.join(BASE_DIR, "schedule.csv")
-    # EMP_CSV      = os.path.join(BASE_DIR, "emp_no.csv")
-    run("schedule.csv", "emp_no.csv")
-
-# ==== 固定パス設定 ====
-# BASE_DIR = os.getcwd()
-# SCHEDULE_CSV = os.path.join(BASE_DIR, "schedule.csv")
-# EMP_CSV = os.path.join(BASE_DIR, "emp_no.csv")
 
 
 # ==== DataFrame読み込み & セルクリーニング ====
@@ -295,10 +273,23 @@ def write_to_excel(records, output_path):
         row_idx += 1
     wb.save(output_path)
 
+    # 3) 出力ファイルを保存
+    out_csv = "formatted_schedule.csv"
+    out_xlsx = "formatted_schedule.xlsx"
+    # schedule_df.to_csv(out_csv, index=False)
+    # <Excel 保存ロジック>
 
-excel_path = os.path.join(BASE_DIR, "blocks_output.xlsx")
-write_to_excel(records, excel_path)
-print(f"Excel schedule written to {excel_path}")
+    return out_csv, out_xlsx
+
+
 if __name__ == "__main__":
-    # ここだけが直接実行されたときに動く
+    # コマンドライン実行時の既存挙動を保持
+    # BASE_DIR = os.getcwd()
+    # SCHEDULE_CSV = os.path.join(BASE_DIR, "schedule.csv")
+    # EMP_CSV      = os.path.join(BASE_DIR, "emp_no.csv")
     run("schedule.csv", "emp_no.csv")
+
+# ==== 固定パス設定 ====
+# BASE_DIR = os.getcwd()
+# SCHEDULE_CSV = os.path.join(BASE_DIR, "schedule.csv")
+# EMP_CSV = os.path.join(BASE_DIR, "emp_no.csv")
