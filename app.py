@@ -1,10 +1,19 @@
 import streamlit as st
-from generate_schedule import run  # モジュール化した関数名に合わせてください
+from generate_schedule import run
 
 st.title("スケジュール整形ツール")
-sched = st.file_uploader("スケジュールCSV", type="csv")
-emp   = st.file_uploader("職員番号CSV", type="csv")
+sched_file = st.file_uploader("スケジュールCSVを選択", type="csv")
+emp_file = st.file_uploader("職員番号CSVを選択", type="csv")
+
 if st.button("実行"):
-    out_path = run(sched, emp)
-    st.success("処理が完了しました！")
-    st.download_button("結果をダウンロード", open(out_path, "rb"), file_name="schedule.xlsx")
+    if not sched_file or not emp_file:
+        st.error("両方のファイルをアップロードしてください")
+    else:
+        csv_out, xlsx_out = run(sched_file, emp_file)
+        st.success("処理が完了しました！")
+        # CSV ダウンロード
+        with open(csv_out, "rb") as f:
+            st.download_button("CSV をダウンロード", f, file_name=csv_out)
+        # Excel ダウンロード
+        with open(xlsx_out, "rb") as f:
+            st.download_button("Excel をダウンロード", f, file_name=xlsx_out)
