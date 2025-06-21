@@ -1,0 +1,207 @@
+import streamlit as st
+import pandas as pd
+import re
+import io
+from openpyxl.styles import Border, Side, Alignment
+
+st.title("整形済スケジュール V20 正式版")
+
+st.markdown("### ファイルをアップロードしてください")
+
+schedule_file = st.file_uploader("スケジュールCSVファイル", type="csv")
+emp_file = st.file_uploader("職員情報ファイル (emp_no.csv)", type="csv")
+output_filename = st.text_input("出力ファイル名（例：整形スケジュール_v20.xlsx）", "整形スケジュール_v20.xlsx")
+
+if st.button("出力"):
+    if schedule_file is None or emp_file is None:
+        st.error("スケジュールファイルと職員情報ファイルの両方をアップロードしてください。")
+    else:
+        emp_df = pd.read_csv(emp_file, header=None, encoding="utf-8", keep_default_na=False)
+        emp_df.columns = [f"col_{i+1}" for i in range(emp_df.shape[1])]
+        emp_df["emp_no"] = emp_df["col_3"].astype(str).str.zfill(5)
+        emp_df["full_name"] = emp_df["col_5"].fillna("").str.strip() + emp_df["col_7"].fillna("").str.strip()
+
+        schedule_df = pd.read_csv(schedule_file, header=None, encoding="utf-8", dtype=str)
+        schedule_df.fillna("", inplace=True)
+
+        def is_OB_row(row):
+            first_cell = row[0].strip()
+            if re.match(r"^[A-Z]+OB$", first_cell):
+                return True
+            for cell in row:
+                if re.search(r"(00099\d{3})", str(cell)):
+                    return True
+            return False
+        header_indices_valid = []
+        for i in range(schedule_df.shape[0] - 1):
+            first_cell = schedule_df.iloc[i, 0].strip()
+            next_row = schedule_df.iloc[i + 1, :].tolist()
+            header_match = bool(re.match(r"^[A-Z]{2,}$|^[A-Z]{3,}$", first_cell))
+            date_count = sum(1 for cell in next_row if re.match(r"^(0?[1-9]|[12][0-9]|3[01])$", str(cell).strip()))
+            if header_match and date_count >= 25:
+                header_indices_valid.append(i)
+
+        crew_blocks = []
+        for idx, header_idx in enumerate(header_indices_valid):
+            next_header_idx = header_indices_valid[idx + 1] if idx + 1 < len(header_indices_valid) else schedule_df.shape[0]
+
+            block_end = schedule_df.shape[0]
+            for j in range(header_idx + 2, schedule_df.shape[0]):
+                row = schedule_df.iloc[j, :].tolist()
+                first_cell = row[0].strip()
+                next_row = schedule_df.iloc[j + 1, :].tolist() if j + 1 < schedule_df.shape[0] else []
+
+                is_fake_header = bool(re.match(r"^[A-Z]{2,}$|^[A-Z]{3,}$", first_cell)) and \
+                                 (sum(1 for cell in next_row if re.match(r"^(0?[1-9]|[12][0-9]|3[01])$", str(cell).strip())) < 25)
+
+                is_blank_row = all([str(cell).strip() == "" for cell in row])
+                is_OB_or_end = is_OB_row(row) or is_fake_header or is_blank_row
+
+                if is_OB_or_end or j >= next_header_idx - 1:
+                    block_end = max(j - 1, header_idx + 2)
+                    break
+
+            header_row = schedule_df.iloc[header_idx, :].tolist()
+            if is_OB_row(header_row):
+                continue
+            crew_blocks.append((header_idx, header_idx + 1, block_end))
+
+        output_rows = []
+        all_crew_schedules = []
+        row_counter = 1
+
+        for block in crew_blocks:
+            header_raw = schedule_df.iloc[block[0], :].tolist()
+            emp_no_match = next((re.search(r"(000\d{5})", cell).group(1) for cell in header_raw if re.search(r"(000\d{5})", cell)), None)
+            emp_name = ""
+            if emp_no_match:
+                emp_name_row = emp_df.loc[emp_df["emp_no"] == emp_no_match[-5:], "full_name"]
+                if not emp_name_row.empty:
+                    emp_name = emp_name_row.iloc[0]
+            name_first_cell = header_raw[0].strip()
+            final_name = emp_name if emp_name else name_first_cell
+
+            header_elements = [final_name, "", emp_no_match if emp_no_match else ""]
+            header_elements += [cell for i, cell in enumerate(header_raw) if i not in [0,2] and str(cell).strip() != ""]
+
+            date_row = schedule_df.iloc[block[1], :].tolist()
+
+            sched_search_range = schedule_df.iloc[block[1]+1 : block[2]+1, :]
+            block_start_dynamic_idx = None
+            for offset, (_, row) in enumerate(sched_search_range.iterrows()):
+                if not all([str(cell).strip() == "" for cell in row.tolist()]):
+                    block_start_dynamic_idx = block[1] + 1 + offset
+                    break
+            if block_start_dynamic_idx is not None:
+                sched_rows = schedule_df.iloc[block_start_dynamic_idx : block[2]+1, :]
+            else:
+                sched_rows = pd.DataFrame()
+
+            date_col_indices = [i for i, cell in enumerate(date_row) if re.match(r"^(0?[1-9]|[12][0-9]|3[01])$", str(cell).strip())]
+            date_col_indices = date_col_indices[:31]
+
+            header_row_fixed = [header_elements[i] if i < len(header_elements) else "" for i in range(31)]
+            date_row_fixed = [date_row[i] for i in date_col_indices]
+            while len(date_row_fixed) < 31:
+                date_row_fixed.append("")
+
+            merged_schedule_row = [""] * 31
+            for i, col_idx in enumerate(date_col_indices):
+                sched_texts = sched_rows.iloc[:, col_idx].apply(lambda x: str(x)).tolist() if not sched_rows.empty else []
+                merged_schedule_row[i] = "\n".join(sched_texts)
+
+            all_crew_schedules.append({
+                'name': final_name,
+                'header_row': header_row_fixed,
+                'date_row': date_row_fixed,
+                'schedule_row': merged_schedule_row,
+                'row_number': row_counter + 1
+            })
+
+            row_counter += 4
+
+        for crew in all_crew_schedules:
+            my_name = crew['name']
+            header_row_fixed = crew['header_row']
+            date_row_fixed = crew['date_row']
+            my_sched_row = crew['schedule_row']
+            my_row_number = crew['row_number']
+            onboard_row = [""] * 31
+
+            for i in range(len(my_sched_row)):
+                my_sched_parts = my_sched_row[i].strip().split("\n")
+                same_sched_crew = set()
+
+                for my_sched_part in my_sched_parts:
+                    my_prefix = re.match(r"^(\d+)", my_sched_part.strip())
+                    if my_prefix:
+                        my_prefix_num = my_prefix.group(1)
+
+                        for other_crew in all_crew_schedules:
+                            if other_crew['name'] == my_name:
+                                continue
+                            if i < len(other_crew['schedule_row']):
+                                other_sched_parts = other_crew['schedule_row'][i].strip().split("\n")
+                                for other_sched_part in other_sched_parts:
+                                    other_prefix = re.match(r"^(\d+)", other_sched_part.strip())
+                                    if other_prefix and other_prefix.group(1) == my_prefix_num:
+                                        same_sched_crew.add(other_crew['name'])
+
+                if same_sched_crew:
+                    onboard_row[i] = "\n".join(sorted(same_sched_crew))
+                else:
+                    onboard_row[i] = ""
+
+            output_rows.append(header_row_fixed)
+            output_rows.append(date_row_fixed)
+            output_rows.append(my_sched_row)
+            output_rows.append(onboard_row)
+
+        output_df = pd.DataFrame(output_rows)
+
+        double_border = Border(
+            top=Side(style='double'),
+            bottom=Side(style='double')
+        )
+
+        alignment_wrap_top = Alignment(
+            vertical='top',
+            wrap_text=True
+        )
+
+        alignment_no_wrap = Alignment(
+            vertical='top',
+            wrap_text=False
+        )
+
+        phone_pattern = re.compile(r"0[0-9]{2,}-[0-9]{3,}-[0-9]{4}")
+
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            output_df.to_excel(writer, index=False, header=False)
+            worksheet = writer.sheets['Sheet1']
+
+            for row_idx in range(1, output_df.shape[0]+1):
+                for col_idx in range(1, 32):
+                    cell = worksheet.cell(row=row_idx, column=col_idx)
+
+                    if (row_idx - 1) % 4 == 0:
+                        cell.border = double_border
+                        cell_value = str(cell.value) if cell.value else ""
+
+                        if phone_pattern.fullmatch(cell_value):
+                            cell.alignment = alignment_no_wrap
+                        else:
+                            cell.alignment = alignment_wrap_top
+                    else:
+                        cell.alignment = alignment_wrap_top
+
+        buffer.seek(0)
+
+        st.success("出力が完了しました！ 下のボタンからダウンロードしてください。")
+        st.download_button(
+            label="📥 ダウンロード",
+            data=buffer,
+            file_name=output_filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
