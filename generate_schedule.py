@@ -4,10 +4,12 @@ import os
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, PatternFill, Border, Side
 
-
 # ==== ヘルパー関数群 ====
+
+
 def clean_cell(text):
     s = str(text)
+    # 不可視文字除去
     s = re.sub(r"[\u200b\u200c\u200d\u2060\uFEFF\u00A0\t\r\n]", "", s)
     return s.strip()
 
@@ -16,7 +18,7 @@ def remove_blank_and_ob(df):
     mask = []
     for _, row in df.iterrows():
         row_str = "".join(row.tolist())
-        mask.append(bool(re.search(r"[01]\-\d{2}\.\d{2}|OB", row_str)))
+        mask.append(bool(re.search(r"[0-9]{1,2}-[0-9]{2}\.[0-9]{2}|OB", row_str)))
     return df[mask].reset_index(drop=True)
 
 
@@ -28,22 +30,29 @@ def find_header_rows(df):
     return hdrs
 
 
-def slice_blocks(df, hdrs):
-    blocks = []
-    n = len(df)
-    for i, h in enumerate(hdrs):
-        nxt = hdrs[i + 1] if i + 1 < len(hdrs) else n
-        blocks.append((h, h + 1, nxt))
-    return blocks
+def find_date_row(df, start_idx):
+    """
+    ヘッダー行 start_idx の次の行から、日付行（01～31の数字のみが並ぶ行）を探して返す
+    """
+    for i in range(start_idx + 1, len(df)):
+        vals = [clean_cell(x) for x in df.iloc[i].tolist()]
+        # 2文字以下の数字列が先頭31列に並ぶなら日付行と判断
+        date_cells = vals[:31]
+        if all(re.fullmatch(r"\d{1,2}", v) or v == "" for v in date_cells) and any(
+            re.fullmatch(r"\d{1,2}", v) for v in date_cells
+        ):
+            return i
+    raise IndexError(f"Date row not found after header at row {start_idx}")
 
 
 def reshape_block(df, h, d, e):
+    # ヘッダー行の整形
     raw_hdr = [clean_cell(x) for x in df.iloc[h].tolist()]
     transformed = []
     for col in raw_hdr:
         if "PE有効期限" in col:
             transformed.append("PE")
-        elif m := re.match(r"^PE[（\\(](\d{6})[）\\)]$", col):
+        elif m := re.match(r"^PE[（\(](\d{6})[）\)]$", col):
             transformed.append(m.group(1))
         elif "社員番号" in col:
             transformed.append("職番")
@@ -51,20 +60,22 @@ def reshape_block(df, h, d, e):
             transformed.append(col)
     hdr31 = transformed[:31] + [""] * (31 - len(transformed))
 
+    # 日付行
     dr = [clean_cell(x) for x in df.iloc[d].tolist()][:31]
 
+    # スケジュール行
     sched = []
-    for ri in range(h + 2, e):
+    for ri in range(d + 1, e):
         sched.append([clean_cell(x) for x in df.iloc[ri].tolist()][:31])
 
+    # 同乗者行
     merged_onb = []
-    for ri in range(h + 2, e):
+    emp_no = re.sub(r".*?(\d{5})$", r"\1", hdr31[2])
+    for ri in range(d + 1, e):
         names = []
         for name in [clean_cell(x) for x in df.iloc[ri, 31:].tolist()]:
             if not name:
                 continue
-            # 所属一致に*付与する処理（emp_df を参照）
-            emp_no = re.sub(r".*?(\d{5})$", r"\1", hdr31[2])
             recs = emp_df_global[emp_df_global.iloc[:, 2] == emp_no]
             if not recs.empty and recs.iloc[0, 3] == recs.iloc[0, 3]:
                 name += "*"
@@ -82,6 +93,7 @@ def write_to_excel(records, output_path):
     double_side = Side(border_style="double", color="000000")
     double_border = Border(top=double_side, bottom=double_side)
 
+    # 列幅設定
     for col in range(1, 32):
         ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = 8
 
@@ -103,7 +115,7 @@ def write_to_excel(records, output_path):
             )
             cell.fill = grey_fill
         row_idx += 1
-        # スケジュール行
+        # スケジュール
         for sched_row in rec["sched"]:
             for ci, val in enumerate(sched_row, start=1):
                 cell = ws.cell(row_idx, ci, val)
@@ -111,7 +123,7 @@ def write_to_excel(records, output_path):
                     horizontal="left", vertical="top", wrap_text=True
                 )
             row_idx += 1
-        # 同乗者行
+        # 同乗者
         for ci, val in enumerate(rec["onb"], start=1):
             cell = ws.cell(row_idx, ci, val)
             cell.alignment = Alignment(
@@ -126,7 +138,7 @@ def write_to_excel(records, output_path):
 
 # ==== エントリポイント ====
 def run(schedule_input, emp_input, config_path=None):
-    # 1) 読み込み
+    # 読み込み
     if hasattr(schedule_input, "read"):
         schedule_df = pd.read_csv(schedule_input, header=None, dtype=str).fillna("")
     else:
@@ -137,24 +149,27 @@ def run(schedule_input, emp_input, config_path=None):
     else:
         emp_df = pd.read_csv(emp_input, header=None, dtype=str).fillna("")
 
-    # emp_df をグローバル変数にセット（reshape_block で参照）
+    # グローバル設定
     global emp_df_global
     emp_df_global = emp_df
 
-    # 2) 整形
+    # 整形
     df = schedule_df.copy().applymap(clean_cell).pipe(remove_blank_and_ob)
     headers = find_header_rows(df)
-    blocks = slice_blocks(df, headers)
-    records = [reshape_block(df, h, d, e) for h, d, e in blocks]
+    records = []
+    for i, h in enumerate(headers):
+        next_h = headers[i + 1] if i + 1 < len(headers) else len(df)
+        d = find_date_row(df, h)
+        records.append(reshape_block(df, h, d, next_h))
 
-    # 3) CSV 出力
+    # CSV 出力
     out_csv = "formatted_schedule.csv"
     out_list = []
     for rec in records:
         out_list.extend([rec["hdr"], rec["dr"]] + rec["sched"] + [rec["onb"]])
     pd.DataFrame(out_list).to_csv(out_csv, header=False, index=False)
 
-    # 4) Excel 出力
+    # Excel 出力
     out_xlsx = "formatted_schedule.xlsx"
     write_to_excel(records, out_xlsx)
 
