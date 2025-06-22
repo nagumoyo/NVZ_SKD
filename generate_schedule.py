@@ -7,94 +7,78 @@ from openpyxl.styles import Alignment, PatternFill, Border, Side
 
 
 def clean_cell(text):
-    """セル内の不要な不可視文字を削除してトリム"""
+    """セル内の不要な不可視文字を削除し、両端をトリム"""
     s = str(text)
     return re.sub(r"[\u200b\u200c\u200d\u2060\uFEFF\u00A0\t\r\n]", "", s).strip()
 
 
 def remove_blank_and_ob(df):
     """
-    空行（全セル空）および"OB"のみの行を削除
+    空セル（全セルが空文字）の行およびOBのみの行を削除する
     """
     df = df.replace({pd.NA: "", "nan": "", "NaN": ""})
     # 全セルが空文字の行を除去
     df = df[(df != "").any(axis=1)]
-    # OB だけの行を除去
+    # OBのみの行を除去
     df = df[~df.apply(lambda row: all(str(c).strip() == "OB" for c in row), axis=1)]
     return df.reset_index(drop=True)
 
 
 def find_header_rows(df):
     """
-    ヘッダー行を検出: 1列目の末尾2文字が英大文字
+    ヘッダー行を検出: 1列目の値の末尾2文字が英大文字かつ次行に日付候補が含まれる
     """
     hdrs = []
-    for idx, row in df.iterrows():
-        val = clean_cell(row.iloc[0])
-        if re.search(r"[A-Z]{2}$", val):
-            hdrs.append(idx)
+    for i in range(len(df) - 1):
+        first = clean_cell(df.iat[i, 0])
+        if not re.search(r"[A-Z]{2}$", first):
+            continue
+        next_row = [clean_cell(x) for x in df.iloc[i + 1].tolist()]
+        cnt = sum(bool(re.fullmatch(r"(0?[1-9]|[12][0-9]|3[01])", v)) for v in next_row)
+        if cnt >= 1:
+            hdrs.append(i)
     return hdrs
-
-
-def find_date_row(df, start_idx):
-    """
-    ヘッダー行 start_idx の次行以降で、先頭31列に日付(1-31)が並ぶ行を探す
-    見つかればインデックス、なければ None
-    """
-    for i in range(start_idx + 1, len(df)):
-        row = [clean_cell(x) for x in df.iloc[i].tolist()][:31]
-        # 数字または空
-        if all(
-            (re.fullmatch(r"(0?[1-9]|[12][0-9]|3[01])", cell) or cell == "")
-            for cell in row
-        ) and any(re.fullmatch(r"(0?[1-9]|[12][0-9]|3[01])", cell) for cell in row):
-            return i
-    return None
 
 
 def slice_blocks(df):
     """
-    ヘッダー行からブロック毎の (h, date_row, next_h) タプルを作成
+    ヘッダー行リストから各ブロック(h, d, next_h, date_positions)を作成
     """
     hdrs = find_header_rows(df)
     blocks = []
     total = len(df)
     for idx, h in enumerate(hdrs):
         nxt = hdrs[idx + 1] if idx + 1 < len(hdrs) else total
-        d = find_date_row(df, h)
-        if d is not None:
-            blocks.append((h, d, nxt))
+        for i in range(h + 1, nxt):
+            row = [clean_cell(x) for x in df.iloc[i].tolist()]
+            date_positions = [
+                j
+                for j, v in enumerate(row)
+                if re.fullmatch(r"(0?[1-9]|[12][0-9]|3[01])", v)
+            ]
+            if date_positions:
+                date_positions = date_positions[:31]
+                blocks.append((h, i, nxt, date_positions))
+                break
     return blocks
 
 
-def reshape_block(df, h, d, e, emp_df):
+def reshape_block(df, h, d, e, date_positions, emp_df):
     """
-    ブロックの範囲 h(ヘッダー), d(日付行), e(次ヘッダーor終端) で整形
+    ブロックごとにヘッダー、日付行、スケジュール行、同乗者行を抽出してdictで返す
+    keys: hdr, dr, sched, onb
     """
     # ヘッダー
-    raw_hdr = [clean_cell(x) for x in df.iloc[h].tolist()][:31]
-    hdr31 = []
-    for col in raw_hdr:
-        if "PE有効期限" in col:
-            hdr31.append("PE")
-        elif m := re.match(r"^PE[（\(]?(\d{6})[）\)]?", col):
-            hdr31.append(m.group(1))
-        elif "社員番号" in col:
-            hdr31.append("職番")
-        else:
-            hdr31.append(col)
-    hdr31 += [""] * (31 - len(hdr31))
-
+    raw_hdr = [clean_cell(x) for x in df.iloc[h].tolist()]
+    hdr31 = raw_hdr[:31] + [""] * (31 - len(raw_hdr[:31]))
     # 日付行
-    row_dates = [clean_cell(x) for x in df.iloc[d].tolist()][:31]
-    dr = row_dates
-
+    dr = [clean_cell(df.iat[d, j]) for j in date_positions] + [""] * (
+        31 - len(date_positions)
+    )
     # スケジュール行
-    sched = []
-    for r in range(d + 1, e):
-        row_vals = [clean_cell(x) for x in df.iloc[r].tolist()][:31]
-        sched.append(row_vals)
-
+    sched = [
+        [clean_cell(df.iat[r, j]) for j in date_positions] for r in range(d + 1, e)
+    ]
     # 同乗者行
     emp_no = None
     if len(hdr31) > 2:
@@ -113,7 +97,6 @@ def reshape_block(df, h, d, e, emp_df):
                     name += "*"
             names.append(name)
         onb.append("\n".join(names))
-
     return {"hdr": hdr31, "dr": dr, "sched": sched, "onb": onb}
 
 
@@ -124,75 +107,65 @@ def write_to_excel(records, out_xlsx):
     hi = PatternFill(fill_type="solid", fgColor="FFFF00")
     dbl = Side(border_style="double", color="000000")
     brd = Border(top=dbl, bottom=dbl)
-
-    # 列幅
+    # 列幅設定
     for c in range(1, 32):
         ws.column_dimensions[ws.cell(row=1, column=c).column_letter].width = 8
-
-    row_idx = 1
+    r = 1
     for rec in records:
-        for c, val in enumerate(rec["hdr"], start=1):
-            cell = ws.cell(row=row_idx, column=c, value=val)
+        for c, v in enumerate(rec["hdr"], start=1):
+            cell = ws.cell(row=r, column=c, value=v)
             cell.alignment = Alignment(
                 horizontal="left", vertical="top", wrap_text=True
             )
             cell.border = brd
-        row_idx += 1
-        for c, val in enumerate(rec["dr"], start=1):
-            cell = ws.cell(row=row_idx, column=c, value=val)
+        r += 1
+        for c, v in enumerate(rec["dr"], start=1):
+            cell = ws.cell(row=r, column=c, value=v)
             cell.alignment = Alignment(
                 horizontal="center", vertical="center", wrap_text=True
             )
             cell.fill = grey
-        row_idx += 1
+        r += 1
         for row_vals in rec["sched"]:
-            for c, val in enumerate(row_vals, start=1):
-                cell = ws.cell(row=row_idx, column=c, value=val)
+            for c, v in enumerate(row_vals, start=1):
+                cell = ws.cell(row=r, column=c, value=v)
                 cell.alignment = Alignment(
                     horizontal="left", vertical="top", wrap_text=True
                 )
-            row_idx += 1
-        for c, val in enumerate(rec["onb"], start=1):
-            cell = ws.cell(row=row_idx, column=c, value=val)
+            r += 1
+        for c, v in enumerate(rec["onb"], start=1):
+            cell = ws.cell(row=r, column=c, value=v)
             cell.alignment = Alignment(
                 horizontal="left", vertical="top", wrap_text=True
             )
-            if "*" in val:
+            if "*" in v:
                 cell.fill = hi
-        row_idx += 1
+        r += 1
     wb.save(out_xlsx)
 
 
 # ==== エントリポイント ====
 def run(schedule_input, emp_input, config_path=None):
-    # 入力読み込み
-    sched_df = (
-        pd.read_csv(schedule_input, header=None, dtype=str).fillna("")
-        if not hasattr(schedule_input, "read")
-        else pd.read_csv(schedule_input, header=None, dtype=str).fillna("")
-    )
-    emp_df = (
-        pd.read_csv(emp_input, header=None, dtype=str).fillna("")
-        if not hasattr(emp_input, "read")
-        else pd.read_csv(emp_input, header=None, dtype=str).fillna("")
-    )
-
-    # ブロック検出・整形
+    if hasattr(schedule_input, "read"):
+        sched_df = pd.read_csv(schedule_input, header=None, dtype=str).fillna("")
+    else:
+        sched_df = pd.read_csv(schedule_input, header=None, dtype=str).fillna("")
+    if hasattr(emp_input, "read"):
+        emp_df = pd.read_csv(emp_input, header=None, dtype=str).fillna("")
+    else:
+        emp_df = pd.read_csv(emp_input, header=None, dtype=str).fillna("")
     df = sched_df.copy().map(clean_cell).pipe(remove_blank_and_ob)
     blocks = slice_blocks(df)
-    records = [reshape_block(df, h, d, e, emp_df) for h, d, e in blocks]
-
-    # CSV出力
+    records = [
+        reshape_block(df, h, d, e, date_pos, emp_df) for h, d, e, date_pos in blocks
+    ]
     out_csv = "formatted_schedule.csv"
     rows = []
     for rec in records:
         rows.extend([rec["hdr"], rec["dr"]] + rec["sched"] + [rec["onb"]])
     pd.DataFrame(rows).to_csv(out_csv, index=False, header=False)
-
-    # Excel出力
     out_xlsx = "formatted_schedule.xlsx"
     write_to_excel(records, out_xlsx)
-
     return out_csv, out_xlsx
 
 
