@@ -13,11 +13,16 @@ def clean_cell(text):
 
 
 def remove_blank_and_ob(df):
-    mask = []
-    for _, row in df.iterrows():
-        row_str = "".join(row.tolist())
-        mask.append(bool(re.search(r"[0-9]{1,2}-[0-9]{2}\.[0-9]{2}|OB", row_str)))
-    return df[mask].reset_index(drop=True)
+    """
+    空行（すべてのセルが空文字列）および OB を含む行を削除します。
+    """
+    # 1) 全セルが空文字列の行を削除
+    df = df[(df != "").any(axis=1)]
+    # 2) 行内に "OB" を含む行を削除
+    df = df[
+        ~df.apply(lambda row: any(str(cell).strip() == "OB" for cell in row), axis=1)
+    ]
+    return df.reset_index(drop=True)
 
 
 def find_header_rows(df):
