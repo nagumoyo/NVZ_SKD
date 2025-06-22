@@ -13,7 +13,7 @@ def clean_cell(text):
 
 
 def remove_blank_and_ob(df):
-    """空セル（全セルが空文字）の行およびOBのみの行を削除する"""
+    """空セル（すべて空文字）の行およびOBのみの行を削除する"""
     df = df.replace({pd.NA: "", "nan": "", "NaN": ""})
     df = df[(df != "").any(axis=1)]
     df = df[~df.apply(lambda row: all(str(c).strip() == "OB" for c in row), axis=1)]
@@ -21,21 +21,22 @@ def remove_blank_and_ob(df):
 
 
 def find_header_rows(df):
-    """ヘッダー行を検出: 1列目の値の末尾2文字が英大文字かつ次行に日付候補が含まれる"""
+    """ヘッダー行を検出: 1列目の値の末尾2文字が英大文字、かつ次行に日付候補が含まれる"""
     hdrs = []
     for i in range(len(df) - 1):
-        first = clean_cell(df.iat[i, 0])
-        if not re.search(r"[A-Z]{2}$", first):
-            continue
-        next_row = [clean_cell(x) for x in df.iloc[i + 1].tolist()]
-        cnt = sum(bool(re.fullmatch(r"(0?[1-9]|[12][0-9]|3[01])", v)) for v in next_row)
-        if cnt >= 1:
-            hdrs.append(i)
+        val = clean_cell(df.iat[i, 0])
+        if re.search(r"[A-Z]{2}$", val):
+            next_row = [clean_cell(x) for x in df.iloc[i + 1].tolist()]
+            cnt = sum(
+                bool(re.fullmatch(r"(0?[1-9]|[12][0-9]|3[01])", v)) for v in next_row
+            )
+            if cnt >= 1:
+                hdrs.append(i)
     return hdrs
 
 
 def slice_blocks(df):
-    """ヘッダー行リストから各ブロック(h, d, next_h, date_positions)を作成"""
+    """各ヘッダー行から日付行・次ヘッダー行までのブロックを取得("h", "d", "e", "date_positions")"""
     hdrs = find_header_rows(df)
     blocks = []
     total = len(df)
@@ -49,22 +50,33 @@ def slice_blocks(df):
                 if re.fullmatch(r"(0?[1-9]|[12][0-9]|3[01])", v)
             ]
             if date_positions:
-                date_positions = date_positions[:31]
-                blocks.append((h, i, nxt, date_positions))
+                blocks.append((h, i, nxt, date_positions[:31]))
                 break
     return blocks
 
 
 def reshape_block(df, h, d, e, date_positions, emp_df):
-    """ブロックごとにヘッダー、日付行、スケジュール行、同乗者行を抽出してdictで返す"""
+    """ブロックごとに {'hdr','dr','sched','onb'} を返す"""
+    # ヘッダー行
     raw_hdr = [clean_cell(x) for x in df.iloc[h].tolist()]
     hdr31 = raw_hdr[:31] + [""] * (31 - len(raw_hdr[:31]))
+    # 日付行
     dr = [clean_cell(df.iat[d, j]) for j in date_positions] + [""] * (
         31 - len(date_positions)
     )
-    sched = [
-        [clean_cell(df.iat[r, j]) for j in date_positions] for r in range(d + 1, e)
-    ]
+
+    # スケジュール行：日付列ごとに複数行をセル内改行でまとめる
+    sched = []
+    for j in date_positions:
+        entries = [
+            clean_cell(df.iat[r, j])
+            for r in range(d + 1, e)
+            if clean_cell(df.iat[r, j])
+        ]
+        sched.append("\n".join(entries))
+    sched += [""] * (31 - len(sched))
+
+    # 同乗者行
     emp_no = None
     if len(hdr31) > 2:
         m = re.search(r"(\d{5})$", hdr31[2])
@@ -82,53 +94,62 @@ def reshape_block(df, h, d, e, date_positions, emp_df):
                     name += "*"
             names.append(name)
         onb.append("\n".join(names))
+
     return {"hdr": hdr31, "dr": dr, "sched": sched, "onb": onb}
 
 
 def write_to_excel(records, out_xlsx):
+    """Excelファイルに出力"""
     wb = Workbook()
     ws = wb.active
     grey = PatternFill(fill_type="solid", fgColor="DDDDDD")
     hi = PatternFill(fill_type="solid", fgColor="FFFF00")
     dbl = Side(border_style="double", color="000000")
     brd = Border(top=dbl, bottom=dbl)
+    # 列幅設定
     for c in range(1, 32):
         ws.column_dimensions[ws.cell(row=1, column=c).column_letter].width = 8
-    r = 1
+
+    row_idx = 1
     for rec in records:
+        # ヘッダー
         for c, v in enumerate(rec["hdr"], start=1):
-            cell = ws.cell(row=r, column=c, value=v)
+            cell = ws.cell(row_idx, c, v)
             cell.alignment = Alignment(
                 horizontal="left", vertical="top", wrap_text=True
             )
             cell.border = brd
-        r += 1
+        row_idx += 1
+        # 日付行
         for c, v in enumerate(rec["dr"], start=1):
-            cell = ws.cell(row=r, column=c, value=v)
+            cell = ws.cell(row_idx, c, v)
             cell.alignment = Alignment(
                 horizontal="center", vertical="center", wrap_text=True
             )
             cell.fill = grey
-        r += 1
-        for row_vals in rec["sched"]:
-            for c, v in enumerate(row_vals, start=1):
-                cell = ws.cell(row=r, column=c, value=v)
-                cell.alignment = Alignment(
-                    horizontal="left", vertical="top", wrap_text=True
-                )
-            r += 1
+        row_idx += 1
+        # スケジュール行
+        for c, v in enumerate(rec["sched"], start=1):
+            cell = ws.cell(row_idx, c, v)
+            cell.alignment = Alignment(
+                horizontal="left", vertical="top", wrap_text=True
+            )
+        row_idx += 1
+        # 同乗者行
         for c, v in enumerate(rec["onb"], start=1):
-            cell = ws.cell(row=r, column=c, value=v)
+            cell = ws.cell(row_idx, c, v)
             cell.alignment = Alignment(
                 horizontal="left", vertical="top", wrap_text=True
             )
             if "*" in v:
                 cell.fill = hi
-        r += 1
+        row_idx += 1
+
     wb.save(out_xlsx)
 
 
 def run(schedule_input, emp_input, config_path=None):
+    """エントリポイント"""
     if hasattr(schedule_input, "read"):
         sched_df = pd.read_csv(schedule_input, header=None, dtype=str).fillna("")
     else:
@@ -137,16 +158,19 @@ def run(schedule_input, emp_input, config_path=None):
         emp_df = pd.read_csv(emp_input, header=None, dtype=str).fillna("")
     else:
         emp_df = pd.read_csv(emp_input, header=None, dtype=str).fillna("")
+
     df = sched_df.copy().map(clean_cell).pipe(remove_blank_and_ob)
     blocks = slice_blocks(df)
     records = [
         reshape_block(df, h, d, e, date_pos, emp_df) for h, d, e, date_pos in blocks
     ]
+
     out_csv = "formatted_schedule.csv"
     rows = []
     for rec in records:
         rows.extend([rec["hdr"], rec["dr"]] + rec["sched"] + [rec["onb"]])
     pd.DataFrame(rows).to_csv(out_csv, index=False, header=False)
+
     out_xlsx = "formatted_schedule.xlsx"
     write_to_excel(records, out_xlsx)
     return out_csv, out_xlsx
