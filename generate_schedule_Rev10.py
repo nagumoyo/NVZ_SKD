@@ -60,11 +60,13 @@ def write_to_excel(records, out_xlsx):
     dbl = Side(border_style="double", color="000000")
     brd = Border(top=dbl, bottom=dbl)
 
+    # Set column widths
     for c in range(1, 32):
         ws.column_dimensions[ws.cell(row=1, column=c).column_letter].width = 8
+
     r = 1
     for rec in records:
-        # Header
+        # Header row
         for c, v in enumerate(rec["hdr"], start=1):
             cell = ws.cell(row=r, column=c, value=v)
             cell.alignment = Alignment(
@@ -72,7 +74,8 @@ def write_to_excel(records, out_xlsx):
             )
             cell.border = brd
         r += 1
-        # Dates
+
+        # Date row
         for c, v in enumerate(rec["dr"], start=1):
             cell = ws.cell(row=r, column=c, value=v)
             cell.alignment = Alignment(
@@ -80,14 +83,16 @@ def write_to_excel(records, out_xlsx):
             )
             cell.fill = grey
         r += 1
-        # Schedule
+
+        # Schedule row
         for c, v in enumerate(rec["sched"], start=1):
             cell = ws.cell(row=r, column=c, value=v)
             cell.alignment = Alignment(
                 horizontal="left", vertical="top", wrap_text=True
             )
         r += 1
-        # Onboard
+
+        # Onboard row
         for c, v in enumerate(rec["onb"], start=1):
             cell = ws.cell(row=r, column=c, value=v)
             cell.alignment = Alignment(
@@ -96,49 +101,31 @@ def write_to_excel(records, out_xlsx):
             if "*" in v:
                 cell.fill = hi
         r += 1
+
     wb.save(out_xlsx)
 
 
 def run(schedule_input, emp_input, config_path=None):
-    # Read inputs
+    # Read input CSVs
     sched_df = pd.read_csv(schedule_input, header=None, dtype=str).fillna("")
     emp_df = pd.read_csv(emp_input, header=None, dtype=str).fillna("")
 
-    # Build emp_map from emp_no (5 digits) to combined name
-    emp_map = {}
-    for _, row in emp_df.iterrows():
-        code = str(row[2]).zfill(5)
-        if re.fullmatch(r"[0-9]{5}", code):
-            name5 = str(row[4]) if pd.notna(row[4]) else ""
-            name7 = str(row[6]) if pd.notna(row[6]) else ""
-            emp_map[code] = name5 + name7
+    # Build employee map (emp_no -> name)
+    emp_map = {row[2]: row[3] for _, row in emp_df.iterrows() if row[2] and row[3]}
 
+    # Clean and slice into blocks
     df = sched_df.copy().map(clean_cell).pipe(remove_blank_and_ob)
     blocks = slice_blocks(df)
 
     crew_data = []
     for h, d, e, dates in blocks:
         raw = [clean_cell(x) for x in df.iloc[h]]
-        # Remove blanks and left-align header values
         hdr_vals = [v for v in raw if v]
         hdr = hdr_vals[:31] + [""] * (31 - len(hdr_vals[:31]))
 
-        # Extract emp_no from original 9th column (raw index 8)
-        emp_no = None
-        if len(raw) > 8:
-            m = re.search(r"000([0-9]{5})", raw[8])
-            if m:
-                emp_no = m.group(1)
-
-        # Replace first header cell with combined name if emp_no matches
-        if emp_no and emp_no in emp_map:
-            hdr[0] = emp_map[emp_no]
-        if emp_no and emp_no in emp_map:
-            hdr[0] = emp_map[emp_no]
-
         dr = [clean_cell(df.iat[d, j]) for j in dates] + [""] * (31 - len(dates))
 
-        # Full schedule entries
+        # All entries for schedule display
         full_entries = [
             [
                 clean_cell(df.iat[r, j])
@@ -147,11 +134,19 @@ def run(schedule_input, emp_input, config_path=None):
             ]
             for j in dates
         ]
-        # Numeric-only entries for matching
+
+        # Numeric-only entries for onboard matching
         flight_entries = [
             [entry for entry in events if re.match(r"^[0-9]", entry)]
             for events in full_entries
         ]
+
+        emp_no = None
+        if len(hdr) > 2:
+            m = re.search(r"(\d{5})$", hdr[2])
+            emp_no = m.group(1) if m else None
+
+        crew_name = emp_map.get(emp_no, hdr_vals[0] if hdr_vals else "")
 
         crew_data.append(
             {
@@ -159,7 +154,8 @@ def run(schedule_input, emp_input, config_path=None):
                 "dr": dr,
                 "full_entries": full_entries,
                 "flight_entries": flight_entries,
-                "crew_name": hdr[0],
+                "emp_no": emp_no,
+                "crew_name": crew_name,
             }
         )
 
