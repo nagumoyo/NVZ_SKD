@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# === generate_schedule20.py ===
+# === generate_schedule19.py ===
 
 import pandas as pd
 import re
@@ -72,9 +72,8 @@ def slice_blocks(df):
     return blocks
 
 
-# Styles
+# Styles for Excel
 HIGHLIGHT = PatternFill(fill_type="solid", fgColor="FFEE99")
-PH_HIGHLIGHT = PatternFill(fill_type="solid", fgColor="9393FF")
 DEFAULT_GREY = PatternFill(fill_type="solid", fgColor="DDDDDD")
 DOUBLE = Side(border_style="double", color="000000")
 
@@ -83,7 +82,6 @@ def write_to_excel(records, emp_aff_map, out_xlsx):
     wb = Workbook()
     ws = wb.active
     row_num = 1
-    # reverse map: display name -> emp_no
     name_to_emp = {rec["hdr"][0]: rec["emp_no"] for rec in records}
 
     for rec in records:
@@ -96,9 +94,6 @@ def write_to_excel(records, emp_aff_map, out_xlsx):
                 horizontal="left", vertical="top", wrap_text=wrap
             )
             cell.border = Border(top=DOUBLE, bottom=DOUBLE)
-            # highlight PH in 30th column? (j=30)
-            if j == 30 and isinstance(val, str) and val.startswith("PH"):
-                cell.fill = PH_HIGHLIGHT
         # date row
         for j, val in enumerate(rec["dr"], start=1):
             cell = ws.cell(row=row_num + 1, column=j, value=val)
@@ -112,7 +107,7 @@ def write_to_excel(records, emp_aff_map, out_xlsx):
             cell.alignment = Alignment(
                 horizontal="left", vertical="top", wrap_text=True
             )
-        # onboard row: highlight if same affiliation
+        # onboard row: highlight cells with same affiliation
         for j, names in enumerate(rec["onb"], start=1):
             cell = ws.cell(row=row_num + 3, column=j, value="\n".join(names))
             cell.alignment = Alignment(
@@ -155,9 +150,9 @@ def run(schedule_file, emp_file):
         raw[0] = f"{surname}{two}" if matched else raw[0]
         vals = [v for v in raw if v]
         hdr = vals[:31] + [""] * (31 - len(vals[:31]))
-        # affiliation in index30
+        # place affiliation in 31st column
         hdr[30] = rec_aff
-        # PH prefix in index29
+        # extract digits from 8th column and set PH prefix in 30th column
         col8 = emp_col8_map.get(code, "")
         m = re.search(r"(\d+)", col8)
         if m:
@@ -197,10 +192,11 @@ def run(schedule_file, emp_file):
             }
         )
 
-    # pad
+    # pad entries
     for rec in records:
         if len(rec["full_entries"]) < len(global_dates):
             rec["full_entries"] += [[]] * (len(global_dates) - len(rec["full_entries"]))
+
     # onboard
     for i, rec in enumerate(records):
         onb = []
@@ -229,7 +225,7 @@ def run(schedule_file, emp_file):
             seen.add(key)
     records = uniq
 
-    # sort
+    # sort by emp_order
     records.sort(
         key=lambda r: (
             emp_order.index(r["emp_no"]) if r["emp_no"] in emp_order else float("inf")
@@ -246,7 +242,7 @@ def run(schedule_file, emp_file):
             w.writerow(rec["sched"])
             w.writerow(["\n".join(x) for x in rec["onb"]])
     # output Excel
-    out_xlsx = "formatted_schedule20.xlsx"
+    out_xlsx = "formatted_schedule19.xlsx"
     write_to_excel(records, emp_aff_map, out_xlsx)
     return out_csv, out_xlsx
 

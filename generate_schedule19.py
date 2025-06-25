@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# === generate_schedule20.py ===
+# === generate_schedule18.py ===
 
 import pandas as pd
 import re
@@ -12,9 +12,8 @@ from openpyxl.styles import Alignment, PatternFill, Border, Side
 
 def clean_cell(text):
     """Remove invisible characters and trim whitespace."""
-    return re.sub(
-        r"[\u200b\u200c\u200d\u2060\uFEFF\u00A0\t\r\n]", "", str(text)
-    ).strip()
+    s = str(text)
+    return re.sub(r"[\u200b\u200c\u200d\u2060\uFEFF\u00A0\t\r\n]", "", s).strip()
 
 
 def remove_blank_and_ob(df):
@@ -74,7 +73,6 @@ def slice_blocks(df):
 
 # Styles
 HIGHLIGHT = PatternFill(fill_type="solid", fgColor="FFEE99")
-PH_HIGHLIGHT = PatternFill(fill_type="solid", fgColor="9393FF")
 DEFAULT_GREY = PatternFill(fill_type="solid", fgColor="DDDDDD")
 DOUBLE = Side(border_style="double", color="000000")
 
@@ -83,11 +81,11 @@ def write_to_excel(records, emp_aff_map, out_xlsx):
     wb = Workbook()
     ws = wb.active
     row_num = 1
-    # reverse map: display name -> emp_no
+    # build reverse map: display name -> emp_no
     name_to_emp = {rec["hdr"][0]: rec["emp_no"] for rec in records}
 
     for rec in records:
-        block_aff = rec["aff"]
+        block_aff = rec["hdr"][30]
         # header row
         for j, val in enumerate(rec["hdr"], start=1):
             cell = ws.cell(row=row_num, column=j, value=val)
@@ -96,9 +94,6 @@ def write_to_excel(records, emp_aff_map, out_xlsx):
                 horizontal="left", vertical="top", wrap_text=wrap
             )
             cell.border = Border(top=DOUBLE, bottom=DOUBLE)
-            # highlight PH in 30th column? (j=30)
-            if j == 30 and isinstance(val, str) and val.startswith("PH"):
-                cell.fill = PH_HIGHLIGHT
         # date row
         for j, val in enumerate(rec["dr"], start=1):
             cell = ws.cell(row=row_num + 1, column=j, value=val)
@@ -118,6 +113,7 @@ def write_to_excel(records, emp_aff_map, out_xlsx):
             cell.alignment = Alignment(
                 horizontal="left", vertical="top", wrap_text=True
             )
+            # check any onboard with same affiliation
             for name in names:
                 emp = name_to_emp.get(name)
                 if emp and emp_aff_map.get(emp) == block_aff:
@@ -131,19 +127,17 @@ def write_to_excel(records, emp_aff_map, out_xlsx):
 def run(schedule_file, emp_file):
     sched = pd.read_csv(schedule_file, header=None, dtype=str).fillna("")
     emp_df = pd.read_csv(emp_file, header=None, dtype=str).fillna("")
-    # build maps
+    # maps
     emp_name_map = {row[2]: row[4] for _, row in emp_df.iterrows()}
     emp_two_map = {row[2]: row[6] for _, row in emp_df.iterrows()}
     emp_aff_map = {row[2]: row[0] for _, row in emp_df.iterrows()}
-    emp_col8_map = {row[2]: row[7] for _, row in emp_df.iterrows()}
     emp_order = emp_df.iloc[:, 2].tolist()
-
+    # parse
     df = sched.copy().map(clean_cell).pipe(remove_blank_and_ob)
     blocks = slice_blocks(df)
     if not blocks:
         return
     global_dates = blocks[0][3]
-
     records = []
     for h, d, end, dates in blocks:
         raw = [clean_cell(x) for x in df.iloc[h]]
@@ -151,18 +145,11 @@ def run(schedule_file, emp_file):
         code = matched[0][3:] if matched else ""
         surname = emp_name_map.get(code, clean_cell(df.iat[h, 0]))
         two = emp_two_map.get(code, clean_cell(df.iat[h, 2]))
-        rec_aff = emp_aff_map.get(code, "")
+        aff = emp_aff_map.get(code, "")
         raw[0] = f"{surname}{two}" if matched else raw[0]
         vals = [v for v in raw if v]
         hdr = vals[:31] + [""] * (31 - len(vals[:31]))
-        # affiliation in index30
-        hdr[30] = rec_aff
-        # PH prefix in index29
-        col8 = emp_col8_map.get(code, "")
-        m = re.search(r"(\d+)", col8)
-        if m:
-            hdr[29] = f"PH{m.group(1)}"
-        # header substitutions
+        hdr[30] = aff
         hdr = [
             re.sub(
                 r"電話番号",
@@ -193,11 +180,9 @@ def run(schedule_file, emp_file):
                 "dr": dr,
                 "sched": sched_row,
                 "full_entries": fe,
-                "aff": rec_aff,
             }
         )
-
-    # pad
+    # pad full_entries
     for rec in records:
         if len(rec["full_entries"]) < len(global_dates):
             rec["full_entries"] += [[]] * (len(global_dates) - len(rec["full_entries"]))
@@ -212,30 +197,28 @@ def run(schedule_file, emp_file):
                     continue
                 if any(f in other["full_entries"][idx] for f in flights):
                     names.append(other["hdr"][0])
+            # unique
             u = []
             for n in names:
                 if n not in u:
                     u.append(n)
             onb.append(u)
         rec["onb"] = onb
-
-    # remove duplicates
+    # remove exact duplicates
     seen = set()
-    uniq = []
+    unique = []
     for rec in records:
         key = (rec["emp_no"], tuple(rec["sched"]))
         if key not in seen:
-            uniq.append(rec)
+            unique.append(rec)
             seen.add(key)
-    records = uniq
-
+    records = unique
     # sort
     records.sort(
         key=lambda r: (
             emp_order.index(r["emp_no"]) if r["emp_no"] in emp_order else float("inf")
         )
     )
-
     # output CSV
     out_csv = "formatted_schedule.csv"
     with open(out_csv, "w", newline="", encoding="utf-8") as f:
@@ -246,7 +229,7 @@ def run(schedule_file, emp_file):
             w.writerow(rec["sched"])
             w.writerow(["\n".join(x) for x in rec["onb"]])
     # output Excel
-    out_xlsx = "formatted_schedule20.xlsx"
+    out_xlsx = "formatted_schedule18.xlsx"
     write_to_excel(records, emp_aff_map, out_xlsx)
     return out_csv, out_xlsx
 
