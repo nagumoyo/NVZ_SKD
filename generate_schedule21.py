@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# === generate_schedule20.py ===
+# === generate_schedule21.py ===
 
 import pandas as pd
 import re
@@ -17,19 +17,28 @@ def clean_cell(text):
     ).strip()
 
 
-def remove_blank_and_ob(df):
-    """Drop rows that are all blank or contain only 'OB'."""
-    rows = []
-    for row in df.values:
-        texts = [str(x).strip() for x in row]
-        if all(not t or t == "OB" for t in texts):
-            continue
-        rows.append(row)
-    return pd.DataFrame(rows, columns=df.columns)
+def read_and_clean_schedule(schedule_file):
+    """Load CSV and drop rows that are empty, contain 'OB', or have emp_no 00099xxx."""
+    df = pd.read_csv(schedule_file, header=None, dtype=str).fillna("")
+    print(f"📥 元データ行数: {len(df)}")
+
+    def is_useless_row(row):
+        name = str(row[0]).strip()
+        emp_no = str(row[15]).strip() if len(row) > 15 else ""
+        if all(str(cell).strip() == "" for cell in row):
+            return True
+        if "OB" in name:
+            return True
+        if re.match(r"^00099\d{3}$", emp_no):
+            return True
+        return False
+
+    cleaned_df = df[~df.apply(is_useless_row, axis=1)].reset_index(drop=True)
+    print(f"🧹 フィルタ後行数: {len(cleaned_df)}")
+    return cleaned_df
 
 
 def find_header_rows(df):
-    """Identify header rows by name and two-letter code patterns."""
     hdrs = []
     for i in range(len(df) - 1):
         c0 = str(df.iat[i, 0]).strip()
@@ -43,11 +52,11 @@ def find_header_rows(df):
             )
         ):
             hdrs.append(i)
+    print(f"🔍 検出されたヘッダー行: {hdrs}")
     return hdrs
 
 
 def slice_blocks(df):
-    """Slice into blocks: (header_idx, date_idx, end_idx, date_cols)."""
     hdrs = find_header_rows(df)
     blocks = []
     total = len(df)
@@ -69,10 +78,11 @@ def slice_blocks(df):
             if re.fullmatch(r"(0?[1-9]|[12][0-9]|3[01])", v)
         ]
         blocks.append((h, d, end, date_cols))
+    print(f"📦 ブロック数: {len(blocks)}")
     return blocks
 
 
-# Styles for Excel
+# Excel styles
 HIGHLIGHT = PatternFill(fill_type="solid", fgColor="FFEE99")
 PH_HIGHLIGHT = PatternFill(fill_type="solid", fgColor="9393FF")
 DEFAULT_GREY = PatternFill(fill_type="solid", fgColor="DDDDDD")
@@ -87,7 +97,6 @@ def write_to_excel(records, emp_aff_map, out_xlsx):
 
     for rec in records:
         block_aff = rec["aff"]
-        # header row
         for j, val in enumerate(rec["hdr"], start=1):
             cell = ws.cell(row=row_num, column=j, value=val)
             wrap = not bool(re.fullmatch(r"0[0-9]{1,}-[0-9]+-[0-9]{4}", val))
@@ -95,23 +104,19 @@ def write_to_excel(records, emp_aff_map, out_xlsx):
                 horizontal="left", vertical="top", wrap_text=wrap
             )
             cell.border = Border(top=DOUBLE, bottom=DOUBLE)
-            # highlight only if exactly PH3 in 30th column
             if j == 30 and val == "PH3":
                 cell.fill = PH_HIGHLIGHT
-        # date row
         for j, val in enumerate(rec["dr"], start=1):
             cell = ws.cell(row=row_num + 1, column=j, value=val)
             cell.alignment = Alignment(
                 horizontal="center", vertical="center", wrap_text=True
             )
             cell.fill = DEFAULT_GREY
-        # schedule row
         for j, val in enumerate(rec["sched"], start=1):
             cell = ws.cell(row=row_num + 2, column=j, value=val)
             cell.alignment = Alignment(
                 horizontal="left", vertical="top", wrap_text=True
             )
-        # onboard row: highlight if same affiliation
         for j, names in enumerate(rec["onb"], start=1):
             cell = ws.cell(row=row_num + 3, column=j, value="\n".join(names))
             cell.alignment = Alignment(
@@ -124,25 +129,27 @@ def write_to_excel(records, emp_aff_map, out_xlsx):
                     break
         row_num += 4
     wb.save(out_xlsx)
+    print(f"📤 Excelファイル書き出し完了: {out_xlsx}")
 
 
-# ==== Main Logic ===
+# Main
+
+
 def run(schedule_file, emp_file):
-    sched = pd.read_csv(schedule_file, header=None, dtype=str).fillna("")
+    df = read_and_clean_schedule(schedule_file).map(clean_cell)
     emp_df = pd.read_csv(emp_file, header=None, dtype=str).fillna("")
-    # build maps
     emp_name_map = {row[2]: row[4] for _, row in emp_df.iterrows()}
     emp_two_map = {row[2]: row[6] for _, row in emp_df.iterrows()}
     emp_aff_map = {row[2]: row[0] for _, row in emp_df.iterrows()}
     emp_col8_map = {row[2]: row[7] for _, row in emp_df.iterrows()}
     emp_order = emp_df.iloc[:, 2].tolist()
 
-    df = sched.copy().map(clean_cell).pipe(remove_blank_and_ob)
     blocks = slice_blocks(df)
     if not blocks:
+        print("⚠️ ブロックが検出されませんでした。処理を中止します。")
         return
-    global_dates = blocks[0][3]
 
+    global_dates = blocks[0][3]
     records = []
     for h, d, end, dates in blocks:
         raw = [clean_cell(x) for x in df.iloc[h]]
@@ -152,17 +159,13 @@ def run(schedule_file, emp_file):
         two = emp_two_map.get(code, clean_cell(df.iat[h, 2]))
         rec_aff = emp_aff_map.get(code, "")
         raw[0] = f"{surname}{two}" if matched else raw[0]
-        # drop blank values and left-align into 31 cols
         vals = [v for v in raw if v]
         hdr = vals[:31] + [""] * (31 - len(vals[:31]))
-        # extract PH<number> and place in 30th column
         col8 = emp_col8_map.get(code, "")
         m = re.search(r"(\d+)", col8)
         if m:
             hdr[29] = f"PH{m.group(1)}"
-        # then place affiliation in 31st column
         hdr[30] = rec_aff
-        # header substitutions for labels
         hdr = [
             re.sub(
                 r"電話番号",
@@ -176,15 +179,14 @@ def run(schedule_file, emp_file):
             for v in hdr
         ]
         dr = [clean_cell(df.iat[d, j]) for j in dates] + [""] * (31 - len(dates))
-        fe = []
-        for j in dates:
-            fe.append(
-                [
-                    clean_cell(df.iat[r2, j])
-                    for r2 in range(d + 1, end)
-                    if clean_cell(df.iat[r2, j])
-                ]
-            )
+        fe = [
+            [
+                clean_cell(df.iat[r2, j])
+                for r2 in range(d + 1, end)
+                if clean_cell(df.iat[r2, j])
+            ]
+            for j in dates
+        ]
         sched_row = ["\n".join(e) for e in fe] + [""] * (31 - len(fe))
         records.append(
             {
@@ -197,28 +199,21 @@ def run(schedule_file, emp_file):
             }
         )
 
-    # pad full_entries
     for rec in records:
         if len(rec["full_entries"]) < len(global_dates):
             rec["full_entries"] += [[]] * (len(global_dates) - len(rec["full_entries"]))
-    # onboard lists
     for i, rec in enumerate(records):
         onb = []
         for idx, entries in enumerate(rec["full_entries"]):
             flights = [e for e in entries if re.match(r"^[0-9]", e)]
             names = []
             for j, other in enumerate(records):
-                if i == j:
-                    continue
-                if any(f in other["full_entries"][idx] for f in flights):
+                if i != j and any(f in other["full_entries"][idx] for f in flights):
                     names.append(other["hdr"][0])
             uniq = []
-            for n in names:
-                if n not in uniq:
-                    uniq.append(n)
+            [uniq.append(n) for n in names if n not in uniq]
             onb.append(uniq)
         rec["onb"] = onb
-    # remove duplicates
     seen = set()
     uniq = []
     for rec in records:
@@ -227,26 +222,34 @@ def run(schedule_file, emp_file):
             uniq.append(rec)
             seen.add(key)
     records = uniq
-    # sort by emp_order
     records.sort(
         key=lambda r: (
             emp_order.index(r["emp_no"]) if r["emp_no"] in emp_order else float("inf")
         )
     )
-    # write CSV
-    out_csv = "formatted_schedule.csv"
-    with open(out_csv, "w", newline="", encoding="utf-8") as f:
+    with open("formatted_schedule.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         for rec in records:
             w.writerow(rec["hdr"])
             w.writerow(rec["dr"])
             w.writerow(rec["sched"])
             w.writerow(["\n".join(x) for x in rec["onb"]])
-    # write Excel
-    out_xlsx = "formatted_schedule20.xlsx"
-    write_to_excel(records, emp_aff_map, out_xlsx)
-    return out_csv, out_xlsx
+    print("📄 CSVファイル書き出し完了: formatted_schedule.csv")
+    write_to_excel(records, emp_aff_map, "formatted_schedule20.xlsx")
+    print("✅ 全処理完了")
+    return "formatted_schedule.csv", "formatted_schedule20.xlsx"
 
+
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("generate_schedule.log", encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
 
 if __name__ == "__main__":
     import argparse

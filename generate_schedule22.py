@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# === generate_schedule20.py ===
+# === generate_schedule22.py ===
 
 import pandas as pd
 import re
@@ -18,20 +18,17 @@ def clean_cell(text):
 
 
 def remove_blank_and_ob(df):
-    """Drop rows that are all blank, contain only 'OB', contain any '00099xxx', or
-    have '[A-Z]+OB' in first column (OB header rows).
-    """
+    """Drop rows that are all blank or contain only 'OB'.
+    Also drop rows where any header row contains '00099xxx' pattern."""
     rows = []
+    skip_indices = set()
     for i, row in enumerate(df.values):
         texts = [str(x).strip() for x in row]
-        # Drop if any cell matches '00099xxx'
+        # Check if header-like row has any '00099xxx'
         if any(re.fullmatch(r"00099[0-9]{3}", t) for t in texts):
+            skip_indices.add(i)
             continue
-        # Drop if all cells are empty or 'OB'
         if all(not t or t == "OB" for t in texts):
-            continue
-        # Drop if first cell matches OB header pattern (e.g., "TANAKAOB")
-        if re.fullmatch(r"[A-Z]+OB", texts[0]):
             continue
         rows.append(row)
     return pd.DataFrame(rows, columns=df.columns)
@@ -252,7 +249,7 @@ def run(schedule_file, emp_file):
             w.writerow(rec["sched"])
             w.writerow(["\n".join(x) for x in rec["onb"]])
     # write Excel
-    out_xlsx = "formatted_schedule20.xlsx"
+    out_xlsx = "formatted_schedule22.xlsx"
     write_to_excel(records, emp_aff_map, out_xlsx)
     return out_csv, out_xlsx
 
