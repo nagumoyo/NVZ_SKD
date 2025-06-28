@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# === generate_schedule24.py ===
+# === generate_schedule21.py ===
 
 import pandas as pd
 import re
@@ -52,6 +52,27 @@ def find_header_rows(df):
     return hdrs
 
 
+def write_onboard_rows(
+    ws, start_row, onboard_data, emp_aff_map, name_to_emp, block_aff, self_name
+):
+    """Write each onboard crew member into its own row, with same affiliation highlighted."""
+    max_onb = max(len(day) for day in onboard_data)
+    for i in range(max_onb):
+        for j, names in enumerate(onboard_data, start=1):
+            value = names[i] if i < len(names) else ""
+            if value == self_name:
+                value = ""
+            cell = ws.cell(row=start_row + i, column=j, value=value)
+            cell.alignment = Alignment(
+                horizontal="left", vertical="top", wrap_text=True
+            )
+            if value:
+                emp = name_to_emp.get(value)
+                if emp and emp_aff_map.get(emp) == block_aff:
+                    cell.fill = PatternFill(fill_type="solid", fgColor="FFEE99")
+    return max_onb
+
+
 def slice_blocks(df):
     """Slice into blocks: (header_idx, date_idx, end_idx, date_cols)."""
     hdrs = find_header_rows(df)
@@ -78,52 +99,12 @@ def slice_blocks(df):
     return blocks
 
 
-def write_onboard_rows(
-    ws,
-    start_row,
-    onboard_data,
-    emp_aff_map,
-    name_to_emp,
-    block_aff,
-    self_name,
-    name_to_row,
-):
-    """Write each onboard crew member into its own row, with same affiliation highlighted and hyperlink."""
-    max_onb = max(len(day) for day in onboard_data)
-    for i in range(max_onb):
-        for j, names in enumerate(onboard_data, start=1):
-            value = names[i] if i < len(names) else ""
-            if value == self_name:
-                value = ""
-            target_row = name_to_row.get(value)
-            cell = ws.cell(row=start_row + i, column=j)
-            if value and target_row:
-                cell.value = f'=HYPERLINK("#A{target_row}", "{value}")'
-            else:
-                cell.value = value
-            cell.alignment = Alignment(
-                horizontal="left", vertical="top", wrap_text=True
-            )
-            if value:
-                emp = name_to_emp.get(value)
-                if emp and emp_aff_map.get(emp) == block_aff:
-                    cell.fill = PatternFill(fill_type="solid", fgColor="FFEE99")
-    return max_onb
-
-
 def write_to_excel(records, emp_aff_map, out_xlsx):
     wb = Workbook()
     ws = wb.active
-
-    # 事前に行数の見積もりとname_to_rowの構築
-    name_to_emp = {rec["hdr"][0]: rec["emp_no"] for rec in records}
-    name_to_row = {}
-    row_counter = 1
-    for rec in records:
-        name_to_row[rec["hdr"][0]] = row_counter
-        row_counter += 3 + max(len(x) for x in rec["onb"])
-
     row_num = 1
+    name_to_emp = {rec["hdr"][0]: rec["emp_no"] for rec in records}
+
     for rec in records:
         block_aff = rec["aff"]
         self_name = rec["hdr"][0]
@@ -153,17 +134,9 @@ def write_to_excel(records, emp_aff_map, out_xlsx):
             )
         # onboard rows
         onboard_count = write_onboard_rows(
-            ws,
-            row_num + 3,
-            rec["onb"],
-            emp_aff_map,
-            name_to_emp,
-            block_aff,
-            self_name,
-            name_to_row,
+            ws, row_num + 3, rec["onb"], emp_aff_map, name_to_emp, block_aff, self_name
         )
         row_num += 3 + onboard_count
-
     wb.save(out_xlsx)
 
 
