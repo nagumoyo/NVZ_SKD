@@ -110,36 +110,65 @@ def load_pref_rules(pref_file):
     return rules
 
 
-def apply_pref_rules_to_cell(cell, val, rules, fallback_color=None):
-    import re
+def match_rule_in_multiline(text, rule, debug_log_path="debug_log.txt"):
+    lines = str(text).split("\n")
+    cond1 = rule["first"].strip()
+    cond2 = rule["second"].strip()
+    op = rule["op"].strip().upper()
 
+    cond1_found = any(cond1 in line for line in lines) if cond1 else False
+    cond2_found = any(cond2 in line for line in lines) if cond2 else False
+
+    # ログをファイルに追記
+    with open(debug_log_path, "a", encoding="utf-8") as f:
+        f.write("\n=== DEBUG MATCH ===\n")
+        f.write(f"Text:\n{text}\n")
+        f.write(f"Lines: {lines}\n")
+        f.write(f"Rule: {rule}\n")
+        f.write(f"cond1_found: {cond1_found}, cond2_found: {cond2_found}, op: {op}\n")
+
+    if op == "AND":
+        return cond1_found and cond2_found
+    elif op == "OR":
+        return cond1_found or cond2_found
+    else:
+        return False
+
+
+def apply_pref_rules_to_cell(cell, val, rules, fallback_color=None):
     text = str(val)
-    applied = False
+    lines = text.split("\n")  # 改行で分割
     for rule in rules:
-        try:
-            cond1 = bool(re.search(rule["first"], text)) if rule["first"] else False
-            cond2 = bool(re.search(rule["second"], text)) if rule["second"] else False
-        except re.error:
-            continue
-        if rule["op"] == "AND" and cond1 and cond2:
+        first = rule["first"] or ""
+        second = rule["second"] or ""
+        op = rule["op"].upper()
+
+        cond1_found = any(
+            re.fullmatch(first, line) or re.search(first, line)
+            for line in lines
+            if first
+        )
+        cond2_found = any(
+            re.fullmatch(second, line) or re.search(second, line)
+            for line in lines
+            if second
+        )
+
+        match = (
+            (op == "AND" and cond1_found and cond2_found)
+            or (op == "OR" and (cond1_found or cond2_found))
+            or (
+                op == "NONE"
+                and (cond1_found or cond2_found or (first == "" and second == ""))
+            )
+        )
+
+        if match:
             cell.fill = PatternFill(
                 fill_type="solid", fgColor=rule["color"].replace("#", "")
             )
-            applied = True
-            break
-        elif rule["op"] == "OR" and (cond1 or cond2):
-            cell.fill = PatternFill(
-                fill_type="solid", fgColor=rule["color"].replace("#", "")
-            )
-            applied = True
-            break
-        elif rule["op"] not in ("AND", "OR") and cond1:
-            cell.fill = PatternFill(
-                fill_type="solid", fgColor=rule["color"].replace("#", "")
-            )
-            applied = True
-            break
-    if not applied and fallback_color:
+            return
+    if fallback_color:
         cell.fill = PatternFill(fill_type="solid", fgColor=fallback_color)
 
 
