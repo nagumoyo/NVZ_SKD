@@ -73,10 +73,17 @@ def slice_blocks(df):
     return blocks
 
 
-def load_pref_rules(file="PREF.xlsx"):
+def load_pref_rules(pref_file):
     from openpyxl import load_workbook
+    import io
 
-    wb = load_workbook(file)
+    # ファイルパスかファイルオブジェクトかを判定
+    if isinstance(pref_file, str):
+        wb = load_workbook(filename=pref_file)
+    else:
+        pref_file.seek(0)  # 読み込み位置を先頭に戻す
+        wb = load_workbook(filename=io.BytesIO(pref_file.read()))
+
     ws = wb.active
     data = list(ws.iter_rows(min_row=2, values_only=True))
     rules = []
