@@ -293,7 +293,7 @@ def run(schedule_file, emp_file, pref_file="PREF.xlsx"):
         vals = [v for v in raw if v]
         hdr = vals[:31] + [""] * (31 - len(vals[:31]))
         col8 = emp_col8_map.get(code, "")
-        m = re.search(r"(\d+.+)", col8)
+        m = re.search(r"(\d+)", col8)
         if m:
             hdr[29] = f"PH{m.group(1)}"
         hdr[30] = rec_aff
