@@ -7,87 +7,6 @@ import csv
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
-from openpyxl import load_workbook
-import warnings
-
-warnings.filterwarnings(
-    "ignore", category=UserWarning, module="openpyxl.styles.stylesheet"
-)
-
-# --- SIMSLOTシートから対象社員IDリストを取得 ---
-wb_pref = load_workbook("PREF.xlsx", data_only=True)
-ws_sim = wb_pref["SIMSLOT"]
-
-# B1 セルの値を取得（例えば "00012345,00067890,00054321" のようなカンマ区切り想定）
-b1_value = ws_sim["B1"].value
-
-# 文字列をカンマで分割し、空白をトリムしたリストに変換
-target_codes = [emp.strip() for emp in str(b1_value).split(",") if emp.strip()]
-
-# デバッグ用：取得結果を確認
-# print(f"SIMSLOT 対象社員 ID リスト: {target_emp_ids}")
-
-import pandas as pd
-
-# ─── ② SIM Slot 実績データ読み込み & 辞書化 ───────────────────────────────
-sim_df = pd.read_excel(
-    "SIM Slot List 202507.xlsx", sheet_name="SIM Slot List", header=2, dtype=str
-).fillna("")
-
-# 「ActivityTypeCode」が target_codes（B1リスト）に含まれない行は除外
-sim_df = sim_df[sim_df["ActivityTypeCode"].isin(target_codes)]
-
-# 日付→day列作成
-sim_df["日付"] = pd.to_datetime(sim_df["日付"], format="%Y/%m/%d", errors="coerce")
-sim_df["day"] = sim_df["日付"].dt.day.astype("Int64")
-
-# Emp ID列をリスト化
-sim_df["教官 Emp ID"] = sim_df["教官 Emp ID"].str.split("/", expand=False)
-sim_df["訓練生 Emp ID"] = sim_df["訓練生 Emp ID"].str.split("/", expand=False)
-
-# 辞書型ルックアップテーブルを生成（空文字はスキップ）
-teacher_lookup = {}
-trainee_lookup = {}
-
-for _, row in sim_df.iterrows():
-    d = int(row["day"])
-    start = row["開始時刻"]
-    end = row["終了時刻"]
-
-    for eid in row["教官 Emp ID"]:
-        eid = eid.strip()
-        if not eid:
-            continue
-        # フル8桁から末尾5桁だけ取り出してキーにする
-        emp_key = eid[-5:]
-        teacher_lookup[(d, emp_key)] = (start, end)
-
-    for eid in row["訓練生 Emp ID"]:
-        eid = eid.strip()
-        if not eid:
-            continue
-        emp_key = eid[-5:]
-        trainee_lookup[(d, emp_key)] = (start, end)
-# ── (SIM Slot 読み込み部の末尾に追記) ─────────────────────────────
-# sim_df: ActivityTypeCode, day, 教官 Emp ID リスト, 訓練生 Emp ID リスト がある DataFrame
-
-# 参加者リスト辞書を作成
-# key: (day, training_code), value: {"teachers": [...], "trainees": [...]}
-simslot_participants = {}
-for _, row in sim_df.iterrows():
-    code = row["ActivityTypeCode"]
-    day = int(row["day"])
-    key = (day, code)
-    # 教官側／訓練生側のリストはすでに row["教官 Emp ID"] が ['00012',...] 末尾5桁で分割済み、
-    # もしくは str.split() 後に末尾5桁化しているはずなのでそのまま使えます。
-    teachers = [eid.strip()[-5:] for eid in row["教官 Emp ID"] if eid.strip()]
-    trainees = [eid.strip()[-5:] for eid in row["訓練生 Emp ID"] if eid.strip()]
-    simslot_participants[key] = {"teachers": teachers, "trainees": trainees}
-
-# 動作確認用
-# print("教師ルックアップ件数:", len(teacher_lookup))
-# print("訓練生ルックアップ件数:", len(trainee_lookup))
-
 
 # ==== Helpers ====
 
@@ -329,30 +248,20 @@ def write_onboard_rows(
     max_onb = max((len(day) for day in onboard_data if day), default=1)
     for i in range(max_onb):
         for j, names in enumerate(onboard_data, start=1):
-            # 元の値（例: "I末継HI" / "T田中AB" / "佐藤CD"）
-            display = names[i] if i < len(names) else ""
+            value = names[i] if i < len(names) else ""
+            if value == self_name:
+                value = ""
+            target_row = name_to_row.get(value)
             cell = ws.cell(row=start_row + i, column=j)
-
-            # プレフィックスを外したキーを探す
-            if display.startswith(("I", "T")):
-                raw_name = display[1:]  # 先頭1文字(I/T)を削除
+            if value and target_row:
+                cell.value = f'=HYPERLINK("#A{target_row}", "{value}")'
             else:
-                raw_name = display
-
-            # リンク先行番号を name_to_row から探す
-            target_row = name_to_row.get(raw_name)
-            if display and target_row:
-                # 表示はプレフィックス付き、リンク先は raw_name のスケジュール行
-                cell.value = f'=HYPERLINK("#A{target_row}", "{display}")'
-            else:
-                cell.value = display
-
-            # 既存の書式設定
+                cell.value = value
             cell.alignment = Alignment(
                 horizontal="left", vertical="top", wrap_text=True
             )
-            if display:
-                emp = name_to_emp.get(raw_name)
+            if value:
+                emp = name_to_emp.get(value)
                 if emp and emp_aff_map.get(emp) == block_aff:
                     cell.fill = PatternFill(fill_type="solid", fgColor="FFEE99")
     return max_onb
@@ -421,54 +330,23 @@ def write_to_excel(records, emp_aff_map, out_xlsx, pref_rules):
 # その他 main 関数などは既存通り（適宜 pref_rules を渡すようにする）
 
 
-def run(
-    schedule_file, emp_file, pref_file="PREF.xlsx", sim_file="SIM Slot List 202507.xlsx"
-):
-    import pandas as pd
-    import re
-    import csv
-    from openpyxl import load_workbook
-    from openpyxl.styles import Alignment, PatternFill, Border, Side
-    from openpyxl.utils import get_column_letter
-
-    # 1) 入力ファイル読込
+def run(schedule_file, emp_file, pref_file="PREF.xlsx"):
     sched = pd.read_csv(schedule_file, header=None, dtype=str).fillna("")
     emp_df = pd.read_csv(emp_file, header=None, dtype=str).fillna("")
     pref_rules = load_pref_rules(pref_file)
+    # SIMSLOTスケジュールコードを読み込み
     simslot_codes = load_simslot_schedule_codes(pref_file)
 
-    # 2) 社員マップ作成
     emp_name_map = {row[2]: row[4] for _, row in emp_df.iterrows()}
     emp_two_map = {row[2]: row[6] for _, row in emp_df.iterrows()}
     emp_aff_map = {row[2]: row[0] for _, row in emp_df.iterrows()}
     emp_col8_map = {row[2]: row[7] for _, row in emp_df.iterrows()}
     emp_order = emp_df.iloc[:, 2].tolist()
-
-    # 3) 元データ整形
     df = sched.copy().map(clean_cell).pipe(remove_blank_and_ob)
     blocks = slice_blocks(df)
     if not blocks:
         return
     global_dates = blocks[0][3]
-
-    # 4) SIM Slot 実績を読み込み、参加者辞書を作成
-    sim_df = pd.read_excel(
-        sim_file, sheet_name="SIM Slot List", header=2, dtype=str
-    ).fillna("")
-    sim_df = sim_df[sim_df["ActivityTypeCode"].isin(simslot_codes)]
-    sim_df["日付"] = pd.to_datetime(sim_df["日付"], format="%Y/%m/%d", errors="coerce")
-    sim_df["day"] = sim_df["日付"].dt.day.astype(int)
-    sim_df["教官 Emp ID"] = sim_df["教官 Emp ID"].str.split("/", expand=False)
-    sim_df["訓練生 Emp ID"] = sim_df["訓練生 Emp ID"].str.split("/", expand=False)
-
-    simslot_participants = {}
-    for _, row in sim_df.iterrows():
-        key = (row["day"], row["ActivityTypeCode"])
-        teachers = [eid.strip()[-5:] for eid in row["教官 Emp ID"] if eid.strip()]
-        trainees = [eid.strip()[-5:] for eid in row["訓練生 Emp ID"] if eid.strip()]
-        simslot_participants[key] = {"teachers": teachers, "trainees": trainees}
-
-    # 5) records 作成
     records = []
     for h, d, end, dates in blocks:
         raw = [clean_cell(x) for x in df.iloc[h]]
@@ -478,7 +356,6 @@ def run(
         two = emp_two_map.get(code, clean_cell(df.iat[h, 2]))
         rec_aff = emp_aff_map.get(code, "")
         raw[0] = f"{surname}{two}" if matched else raw[0]
-
         vals = [v for v in raw if v]
         hdr = vals[:31] + [""] * (31 - len(vals[:31]))
         col8 = emp_col8_map.get(code, "")
@@ -498,7 +375,6 @@ def run(
             )
             for v in hdr
         ]
-
         dr = [clean_cell(df.iat[d, j]) for j in dates] + [""] * (31 - len(dates))
         fe = []
         for j in dates:
@@ -510,7 +386,6 @@ def run(
                 ]
             )
         sched_row = ["\n".join(e) for e in fe] + [""] * (31 - len(fe))
-
         records.append(
             {
                 "emp_no": code,
@@ -521,101 +396,25 @@ def run(
                 "aff": rec_aff,
             }
         )
-
     for rec in records:
         if len(rec["full_entries"]) < len(global_dates):
             rec["full_entries"] += [[]] * (len(global_dates) - len(rec["full_entries"]))
-
-    # 6) Ver26 Phase1: 訓練コード＋ISR/TRN のみ残す
-    for rec in records:
-        for idx, cell_text in enumerate(rec["sched"]):
-            if not cell_text:
-                continue
-            lines = cell_text.split("\n")
-            first = lines[0].strip()
-            if first in simslot_codes and "ISR" in cell_text:
-                rec["sched"][idx] = f"{first}\nISR"
-            elif first in simslot_codes and "TRN" in cell_text:
-                rec["sched"][idx] = f"{first}\nTRN"
-
-    # 7) Ver26 Phase2: SIMSLOT 辞書から時間帯を追記
-    for rec in records:
-        emp_id = rec["emp_no"]
-        for idx, cell_text in enumerate(rec["sched"]):
-            if not cell_text:
-                continue
-            if "ISR" in cell_text:
-                code = "ISR"
-            elif "TRN" in cell_text:
-                code = "TRN"
-            else:
-                continue
-
-            day_str = rec["dr"][idx]
-            try:
-                day = int(day_str)
-            except ValueError:
-                continue
-
-            lookup = teacher_lookup if code == "ISR" else trainee_lookup
-            time_pair = lookup.get((day, emp_id))
-            if not time_pair:
-                continue
-
-            start, end = time_pair
-            rec["sched"][idx] = f"{cell_text}\n{start}-{end}"
-
-    # 8) Ver27a: onb ロジック統合（訓練／通常フライト両対応）
     for i, rec in enumerate(records):
-        emp_id = rec["emp_no"]
         onb = []
-        for idx, sched_cell in enumerate(rec["sched"]):
-            first_line = sched_cell.split("\n", 1)[0].strip() if sched_cell else ""
-            if first_line in simslot_codes:
-                # 訓練時の同乗者（I/T）
-                day_str = rec["dr"][idx]
-                try:
-                    day = int(day_str)
-                except ValueError:
-                    onb.append([])
+        for idx, entries in enumerate(rec["full_entries"]):
+            flights = [e for e in entries if e and re.match(r"^[0-9]", e)]
+            names = []
+            for j, other in enumerate(records):
+                if i == j:
                     continue
-
-                parts = simslot_participants.get(
-                    (day, first_line), {"teachers": [], "trainees": []}
-                )
-                names = []
-                for tid in parts["teachers"]:
-                    if tid != emp_id:
-                        nm = emp_name_map.get(tid, "")
-                        two = emp_two_map.get(tid, "")
-                        if nm:
-                            names.append(f"I{nm}{two}")
-                for tid in parts["trainees"]:
-                    if tid != emp_id:
-                        nm = emp_name_map.get(tid, "")
-                        two = emp_two_map.get(tid, "")
-                        if nm:
-                            names.append(f"T{nm}{two}")
-                onb.append(names)
-            else:
-                # 通常フライトの同乗者（便番号ベース）
-                entries = rec["full_entries"][idx]
-                flights = [e for e in entries if e and re.match(r"^[0-9]", e)]
-                names = []
-                for j, other in enumerate(records):
-                    if i == j:
-                        continue
-                    other_entries = other["full_entries"][idx]
-                    if any(f in other_entries for f in flights):
-                        names.append(other["hdr"][0])
-                uniq = []
-                for n in names:
-                    if n not in uniq:
-                        uniq.append(n)
-                onb.append(uniq)
+                if any(f in other["full_entries"][idx] for f in flights):
+                    names.append(other["hdr"][0])
+            uniq = []
+            for n in names:
+                if n not in uniq:
+                    uniq.append(n)
+            onb.append(uniq)
         rec["onb"] = onb
-
-    # 9) 重複レコード削除・ソート
     seen = set()
     uniq = []
     for rec in records:
@@ -629,8 +428,6 @@ def run(
             emp_order.index(r["emp_no"]) if r["emp_no"] in emp_order else float("inf")
         )
     )
-
-    # 10) 出力
     out_csv = "formatted_schedule.csv"
     with open(out_csv, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
@@ -639,7 +436,6 @@ def run(
             w.writerow(rec["dr"])
             w.writerow(rec["sched"])
             w.writerow(["\n".join(x) for x in rec["onb"]])
-
     out_xlsx = "formatted_schedule20.xlsx"
     write_to_excel(records, emp_aff_map, out_xlsx, pref_rules)
     return out_csv, out_xlsx
