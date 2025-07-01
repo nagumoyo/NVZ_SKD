@@ -451,7 +451,7 @@ def run(
         return
     global_dates = blocks[0][3]
 
-    # 4) SIM Slot 実績を読み込み、参加者辞書を作成
+    # ── 4) SIM Slot 実績を読み込み、参加者辞書を作成 ────────────────────
     sim_df = pd.read_excel(
         sim_file, sheet_name="SIM Slot List", header=2, dtype=str
     ).fillna("")
@@ -464,9 +464,20 @@ def run(
     simslot_participants = {}
     for _, row in sim_df.iterrows():
         key = (row["day"], row["ActivityTypeCode"])
+        # 末尾5桁化して空文字を除く
         teachers = [eid.strip()[-5:] for eid in row["教官 Emp ID"] if eid.strip()]
         trainees = [eid.strip()[-5:] for eid in row["訓練生 Emp ID"] if eid.strip()]
-        simslot_participants[key] = {"teachers": teachers, "trainees": trainees}
+
+        # 追加集約に変更
+        if key not in simslot_participants:
+            simslot_participants[key] = {"teachers": [], "trainees": []}
+        simslot_participants[key]["teachers"].extend(teachers)
+        simslot_participants[key]["trainees"].extend(trainees)
+
+    # 重複削除
+    for key, parts in simslot_participants.items():
+        parts["teachers"] = list(dict.fromkeys(parts["teachers"]))
+        parts["trainees"] = list(dict.fromkeys(parts["trainees"]))
 
     # 5) records 作成
     records = []
