@@ -565,34 +565,33 @@ def run(
                 continue
             rec["sched"][idx] = f"{code}\n{subcode}\n{machine}\n{start}-{end}"
 
-    # ── Phase3: onb ロジック統合（自己除外強化版） ──────────────────
+    # 8) Phase3: onb ロジック統合（修正版）
     for i, rec in enumerate(records):
         emp_id = rec["emp_no"]
         onb = []
-        for idx, sched_cell in enumerate(rec["sched"]):
-            # 空セルなら空リスト
-            if not sched_cell:
+        for idx, cell_text in enumerate(rec["sched"]):
+            if not cell_text:
                 onb.append([])
                 continue
 
-            lines = sched_cell.split("\n", 1)
-            first = lines[0].strip()
+            lines = cell_text.split("\n")
+            code = lines[0].strip()
 
-            # --- 訓練コードセルの場合 ---
-            if first in simslot_codes:
-                # 1) 日付取得
+            # ── 訓練コードセルの場合 ──────────────────────────
+            if code in simslot_codes:
+                # ① 日付取得
                 try:
                     day = int(rec["dr"][idx])
                 except ValueError:
                     onb.append([])
                     continue
 
-                # 2) 自分が参加している号機グループを探す
+                # ② 自分が参加している号機グループを見つける
                 parts = None
                 for (d, c, s, e, m), grp in simslot_participants.items():
                     if (
                         d == day
-                        and c == first
+                        and c == code
                         and emp_id in grp["teachers"] + grp["trainees"]
                     ):
                         parts = grp
@@ -602,54 +601,38 @@ def run(
                     onb.append([])
                     continue
 
-                # 3) 教官／訓練生を I/T 付きでリスト化（自己除外強化）
+                # ③ 教官／訓練生を I/T 付きでリスト化
                 names = []
-                # 教官側
                 for tid in parts["teachers"]:
-                    if tid.strip() == emp_id.strip():
-                        # 自己除外漏れデバッグログ
-                        print(
-                            f"[DEBUG] skip self teacher tid={tid!r}, emp_id={emp_id!r}"
-                        )
-                        continue
-                    nm = emp_name_map.get(tid, "")
-                    two = emp_two_map.get(tid, "")
-                    if nm:
-                        names.append(f"I{nm}{two}")
-                # 訓練生側
+                    if tid != emp_id:
+                        nm = emp_name_map.get(tid, "")
+                        two = emp_two_map.get(tid, "")
+                        if nm:
+                            names.append(f"I{nm}{two}")
                 for tid in parts["trainees"]:
-                    if tid.strip() == emp_id.strip():
-                        print(
-                            f"[DEBUG] skip self trainee tid={tid!r}, emp_id={emp_id!r}"
-                        )
-                        continue
-                    nm = emp_name_map.get(tid, "")
-                    two = emp_two_map.get(tid, "")
-                    if nm:
-                        names.append(f"T{nm}{two}")
+                    if tid != emp_id:
+                        nm = emp_name_map.get(tid, "")
+                        two = emp_two_map.get(tid, "")
+                        if nm:
+                            names.append(f"T{nm}{two}")
+
                 onb.append(names)
 
-            # --- 通常フライトセルの場合 ---
+            # ── 通常フライトセルの場合 ─────────────────────────────
             else:
                 entries = rec["full_entries"][idx]
                 flights = [e for e in entries if e and re.match(r"^[0-9]", e)]
                 names = []
                 for j, other in enumerate(records):
-                    # インデックス or 氏名ベースで自己除外
-                    if i == j or other["hdr"][0] == rec["hdr"][0]:
+                    if i == j:
                         continue
                     other_entries = other["full_entries"][idx]
                     if any(f in other_entries for f in flights):
                         names.append(other["hdr"][0])
                 # 重複除去
-                uniq = []
-                for n in names:
-                    if n not in uniq:
-                        uniq.append(n)
-                onb.append(uniq)
+                onb.append(list(dict.fromkeys(names)))
 
         rec["onb"] = onb
-    # ────────────────────────────────────────────────────────────
 
     # 9) 重複レコード削除＆ソート
     seen, uniq = set(), []
