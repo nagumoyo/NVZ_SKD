@@ -75,26 +75,15 @@ def clean_cell(text):
 
 def remove_blank_and_ob(df):
     rows = []
-    # 除外したいEmp IDのセット
-    skip_ids = {"00049292", "00035957", "00041169"}
-
-    for row in df.values:
+    for i, row in enumerate(df.values):
         texts = [str(x).strip() for x in row]
-
-        # 1) 元のOB判定ロジック
         if any(re.fullmatch(r"00099[0-9]{3}", t) for t in texts):
             continue
         if all(not t or t == "OB" for t in texts):
             continue
         if re.fullmatch(r"[A-Z]+OB", texts[0]):
             continue
-
-        # 2) 追加：特定Emp IDを含む行はスキップ
-        if any(t in skip_ids for t in texts):
-            continue
-
         rows.append(row)
-
     return pd.DataFrame(rows, columns=df.columns)
 
 
