@@ -387,30 +387,22 @@ def run(
         return
     global_dates = blocks[0][3]
 
-    # ── 4) SIM Slot 実績読み込み＆ルックアップ辞書、参加者辞書作成 ────────────────────
+    # ── 4) SIM Slot 実績読み込み＆参加者辞書作成 ──────────────────────────
     sim_df = pd.read_excel(
         sim_file, sheet_name="SIM Slot List", header=2, dtype=str
     ).fillna("")
-    # ActivityTypeCode 列で絞り込み
     sim_df = sim_df[sim_df["ActivityTypeCode"].isin(simslot_codes)]
-    # Event Name も取り込んでおく
     sim_df["Event Name"] = sim_df["Event Name"].fillna("").astype(str).str.strip()
-
-    # 日付→day列
     sim_df["日付"] = pd.to_datetime(sim_df["日付"], format="%Y/%m/%d", errors="coerce")
     sim_df["day"] = sim_df["日付"].dt.day.astype(int)
-
-    # Emp ID 列をリスト化
     sim_df["教官 Emp ID"] = sim_df["教官 Emp ID"].str.split("/", expand=False)
     sim_df["訓練生 Emp ID"] = sim_df["訓練生 Emp ID"].str.split("/", expand=False)
 
-    # 辞書初期化
     teacher_lookup = {}
     trainee_lookup = {}
     simslot_participants = {}
     machine_col = sim_df.columns[1]  # B列
 
-    # 全行ループ
     for _, row in sim_df.iterrows():
         day = row["day"]
         act_code = row["ActivityTypeCode"].strip()
@@ -418,7 +410,7 @@ def run(
         start = row["開始時刻"]
         end = row["終了時刻"]
 
-        # ① 時刻ルックアップ辞書を作成
+        # 時刻ルックアップ辞書
         for eid in row["教官 Emp ID"]:
             eid5 = eid.strip()[-5:]
             if eid5:
@@ -428,7 +420,7 @@ def run(
             if eid5:
                 trainee_lookup[(day, eid5)] = (start, end)
 
-        # ② 号機情報を取得
+        # 号機情報取得
         raw_m = str(row[machine_col]).strip()
         if raw_m == "" or raw_m.upper() == "APT":
             machine = "APT"
@@ -439,7 +431,7 @@ def run(
         else:
             machine = raw_m
 
-        # ③ 登録対象のコード群 (ActivityTypeCode + Event Name)
+        # 登録対象コード群(ActivityTypeCode + Event Name)
         codes = [act_code]
         if evt_code and evt_code != act_code:
             codes.append(evt_code)
@@ -447,18 +439,18 @@ def run(
         teachers = [eid.strip()[-5:] for eid in row["教官 Emp ID"] if eid.strip()]
         trainees = [eid.strip()[-5:] for eid in row["訓練生 Emp ID"] if eid.strip()]
 
-        # ④ 各コードキーで同乗者情報を集約
         for code_key in codes:
             key = (day, code_key, start, end, machine)
-            simslot_participants.setdefault(key, {"teachers": [], "trainees": []})
+            simslot_participants.setdefault(
+                key, {"teachers": [], "trainees": [], "event": evt_code}
+            )
             simslot_participants[key]["teachers"].extend(teachers)
             simslot_participants[key]["trainees"].extend(trainees)
 
-    # 重複除去
     for parts in simslot_participants.values():
         parts["teachers"] = list(dict.fromkeys(parts["teachers"]))
         parts["trainees"] = list(dict.fromkeys(parts["trainees"]))
-    # ────────────────────────────────────────────────────────────
+    # ───────────────────────────────────────────────────────────────────
 
     # 5) records 作成
     records = []
@@ -531,7 +523,7 @@ def run(
                 elif "TRN" in cell_text:
                     rec["sched"][idx] = f"{first}\nTRN"
 
-    # 7) Phase2: 時間帯＋号機追記
+    # ── 7) Phase2: 時間帯＋号機＋Event Name（特定コードのみ）追記 ─────────
     for rec in records:
         emp_id = rec["emp_no"]
         for idx, cell_text in enumerate(rec["sched"]):
@@ -544,51 +536,61 @@ def run(
             subcode = lines[1].strip()
             if subcode not in ("ISR", "TRN"):
                 continue
+
+            # 日付取得
             try:
                 day = int(rec["dr"][idx])
-            except:
+            except ValueError:
                 continue
+
+            # 時刻取得
             lookup = teacher_lookup if subcode == "ISR" else trainee_lookup
             time_pair = lookup.get((day, emp_id))
             if not time_pair:
                 continue
             start, end = time_pair
-            # 号機検出
-            machine = None
-            for (d, c, s, e, m), parts in simslot_participants.items():
-                if (d, c, s, e) == (day, code, start, end) and emp_id in parts[
-                    "teachers"
-                ] + parts["trainees"]:
-                    machine = m
-                    break
-            if not machine:
-                continue
-            rec["sched"][idx] = f"{code}\n{subcode}\n{machine}\n{start}-{end}"
 
-    # ── Phase3: onb ロジック統合（自己除外強化版） ──────────────────
+            # 号機特定
+            machine = None
+            parts = None
+            for (d, c, s, e, m), grp in simslot_participants.items():
+                if (d, c, s, e) == (day, code, start, end) and emp_id in grp[
+                    "teachers"
+                ] + grp["trainees"]:
+                    machine = m
+                    parts = grp
+                    break
+            if not parts:
+                continue
+
+            # Event Name は特定コードのみ
+            event_name = parts.get("event", "")
+            base = f"{code}\n{subcode}\n{machine}\n{start}-{end}"
+            if code in ("FOTR", "CATR", "CAUG") and event_name:
+                rec["sched"][idx] = f"{base}\n{event_name}"
+            else:
+                rec["sched"][idx] = base
+    # ───────────────────────────────────────────────────────────────────
+
+    # 8) Phase3: onb ロジック統合（自己除外強化版） ─────────────────────
     for i, rec in enumerate(records):
         emp_id = rec["emp_no"]
         onb = []
         for idx, sched_cell in enumerate(rec["sched"]):
-            # 空セルなら空リスト
             if not sched_cell:
                 onb.append([])
                 continue
-
             lines = sched_cell.split("\n", 1)
             first = lines[0].strip()
 
-            # --- 訓練コードセルの場合 ---
             if first in simslot_codes:
-                # 1) 日付取得
                 try:
                     day = int(rec["dr"][idx])
                 except ValueError:
                     onb.append([])
                     continue
-
-                # 2) 自分が参加している号機グループを探す
                 parts = None
+                machine = None
                 for (d, c, s, e, m), grp in simslot_participants.items():
                     if (
                         d == day
@@ -601,55 +603,38 @@ def run(
                 if not parts:
                     onb.append([])
                     continue
-
-                # 3) 教官／訓練生を I/T 付きでリスト化（自己除外強化）
                 names = []
-                # 教官側
                 for tid in parts["teachers"]:
                     if tid.strip() == emp_id.strip():
-                        # 自己除外漏れデバッグログ
-                        print(
-                            f"[DEBUG] skip self teacher tid={tid!r}, emp_id={emp_id!r}"
-                        )
                         continue
                     nm = emp_name_map.get(tid, "")
                     two = emp_two_map.get(tid, "")
                     if nm:
                         names.append(f"I{nm}{two}")
-                # 訓練生側
                 for tid in parts["trainees"]:
                     if tid.strip() == emp_id.strip():
-                        print(
-                            f"[DEBUG] skip self trainee tid={tid!r}, emp_id={emp_id!r}"
-                        )
                         continue
                     nm = emp_name_map.get(tid, "")
                     two = emp_two_map.get(tid, "")
                     if nm:
                         names.append(f"T{nm}{two}")
                 onb.append(names)
-
-            # --- 通常フライトセルの場合 ---
             else:
                 entries = rec["full_entries"][idx]
                 flights = [e for e in entries if e and re.match(r"^[0-9]", e)]
                 names = []
                 for j, other in enumerate(records):
-                    # インデックス or 氏名ベースで自己除外
                     if i == j or other["hdr"][0] == rec["hdr"][0]:
                         continue
                     other_entries = other["full_entries"][idx]
                     if any(f in other_entries for f in flights):
                         names.append(other["hdr"][0])
-                # 重複除去
                 uniq = []
                 for n in names:
                     if n not in uniq:
                         uniq.append(n)
                 onb.append(uniq)
-
         rec["onb"] = onb
-    # ────────────────────────────────────────────────────────────
 
     # 9) 重複レコード削除＆ソート
     seen, uniq = set(), []

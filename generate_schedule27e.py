@@ -608,9 +608,9 @@ def run(
                 for tid in parts["teachers"]:
                     if tid.strip() == emp_id.strip():
                         # 自己除外漏れデバッグログ
-                        print(
-                            f"[DEBUG] skip self teacher tid={tid!r}, emp_id={emp_id!r}"
-                        )
+                        # print(
+                        #     f"[DEBUG] skip self teacher tid={tid!r}, emp_id={emp_id!r}"
+                        # )
                         continue
                     nm = emp_name_map.get(tid, "")
                     two = emp_two_map.get(tid, "")
@@ -619,9 +619,9 @@ def run(
                 # 訓練生側
                 for tid in parts["trainees"]:
                     if tid.strip() == emp_id.strip():
-                        print(
-                            f"[DEBUG] skip self trainee tid={tid!r}, emp_id={emp_id!r}"
-                        )
+                        # print(
+                        #     f"[DEBUG] skip self trainee tid={tid!r}, emp_id={emp_id!r}"
+                        # )
                         continue
                     nm = emp_name_map.get(tid, "")
                     two = emp_two_map.get(tid, "")
