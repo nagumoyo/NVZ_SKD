@@ -369,13 +369,7 @@ def run(
 
     # 1) 入力ファイル読み込み
     sched = pd.read_csv(schedule_file, header=None, dtype=str).fillna("")
-    # emp_no.csv の代わりに、PREF.xlsx 内シート "emp_no" を読み込む
-    emp_df = pd.read_excel(
-        pref_file,
-        sheet_name="emp_no",  # emp_no シートを作っておいてください
-        header=None,  # CSV と同じ形式であればヘッダーなし
-        dtype=str,
-    ).fillna("")
+    emp_df = pd.read_csv(emp_file, header=None, dtype=str).fillna("")
     pref_rules = load_pref_rules(pref_file)
     simslot_codes = load_simslot_schedule_codes(pref_file)
 
@@ -681,10 +675,11 @@ if __name__ == "__main__":
 
     p = argparse.ArgumentParser()
     p.add_argument("--schedule", default="schedule.csv")
+    p.add_argument("--emp", default="emp_no.csv")
     p.add_argument("--pref", default="PREF.xlsx")
     p.add_argument(
         "--sim", default="SIM Slot List 202507.xlsx"
     )  # SIM Slot ファイルをオプションとして追加
 
     a = p.parse_args()
-    run(a.schedule, a.pref)
+    run(a.schedule, a.emp, a.pref)

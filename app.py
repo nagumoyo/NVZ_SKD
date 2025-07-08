@@ -5,9 +5,14 @@ st.title("スケジュール整形ツール")
 
 # --- ファイルアップロード UI ---
 st.sidebar.header("入力ファイル")
+
+# スケジュールCSVアップロード
 sched_file = st.sidebar.file_uploader("スケジュールCSVを選択", type=["csv"])
-emp_file = st.sidebar.file_uploader("職員番号CSVを選択", type=["csv"])
+
+# 設定ファイル（PREF.xlsx）アップロード
 pref_file = st.sidebar.file_uploader("設定ファイル（PREF.xlsx）を選択", type=["xlsx"])
+
+# SIM Slot List Excelアップロード
 simslot_file = st.sidebar.file_uploader(
     "SIM Slot List Excelを選択",
     type=["xlsx"],
@@ -16,15 +21,16 @@ simslot_file = st.sidebar.file_uploader(
 
 # --- 実行ボタン ---
 if st.sidebar.button("実行"):
-    if not sched_file or not emp_file or not simslot_file:
+    # 必要ファイルのチェック
+    if not sched_file or not pref_file or not simslot_file:
         st.sidebar.error(
-            "スケジュールCSV／職員番号CSV／SIM Slot List Excel のすべてをアップロードしてください。"
+            "スケジュールCSV／設定ファイル(PREF.xlsx)／SIM Slot List Excel のすべてをアップロードしてください。"
         )
     else:
         try:
+            # run の呼び出し（emp ファイルは不要になりました）
             result = run(
                 schedule_file=sched_file,
-                emp_file=emp_file,
                 pref_file=pref_file,
                 sim_file=simslot_file,
             )
