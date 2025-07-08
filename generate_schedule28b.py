@@ -357,9 +357,7 @@ def write_to_excel(records, emp_aff_map, out_xlsx, pref_rules):
 # その他 main 関数などは既存通り（適宜 pref_rules を渡すようにする）
 
 
-def run(
-    schedule_file, emp_file, pref_file="PREF.xlsx", sim_file="SIM Slot List 202507.xlsx"
-):
+def run(schedule_file, pref_file="PREF.xlsx", sim_file="SIM Slot List 202507.xlsx"):
     import pandas as pd
     import re
     import csv
