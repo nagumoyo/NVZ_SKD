@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# === generate_schedule29.py ===
+# === generate_schedule28d.py ===
 
 import pandas as pd
 import re
@@ -470,24 +470,17 @@ def write_to_excel(
     # レコードごとに行書込みループ
     current_row = 1
     for rec in records:
-        # ── ヘッダー行（電話番号とPE番号のみ折り返しオフ、PE番号は縮小表示） ──
+        # ヘッダー行
         for col, val in enumerate(rec["hdr"], start=1):
             cell = ws.cell(row=current_row, column=col, value=val)
-
-            # 電話番号らしい文字列（例：03-1234-5678 や 「電話」）かどうか
-            is_phone = bool(re.search(r"\d{2,4}-\d{2,4}-\d{4}", val)) or "電話" in val
-            # PExxxxxx 形式かどうか
-            is_pe = bool(re.fullmatch(r"PE\d{6}", val))
-
+            wrap = not bool(re.fullmatch(r"0[0-9]+-[0-9]+-[0-9]{4}", val))
             cell.alignment = Alignment(
-                horizontal="left",
-                vertical="top",
-                wrap_text=not (is_phone or is_pe),  # 電話番号・PE番号は折り返しオフ
-                shrink_to_fit=is_pe,  # PE番号のみ縮小表示
+                horizontal="left", vertical="top", wrap_text=wrap
             )
             cell.border = Border(
                 top=Side(border_style="double"), bottom=Side(border_style="double")
             )
+
         # 日付行
         for col, dv in enumerate(rec["dr"], start=1):
             cell = ws.cell(row=current_row + 1, column=col, value=dv)
@@ -674,34 +667,16 @@ def run(
         hdr[29] = display
         hdr[30] = rec_aff
 
-        # ── セル内文字列整形ルール (まとめて置換) ───────────────────────────────────
-        # 「PE有効期限」→「PE」, 「PExxxxxx」→「xxxxxx」
+        # 「PE有効期限」→「PE」, 「PExxxxxx」→「xxxxxx」,
         # 「社員番号」→「職番」, 「電話番号」→「電話」
-        # 「CAT資格」→「CAT資」, 「T/O期限」→「T/O」, 「L/D期限」→「L/D」
         hdr = [
             re.sub(
-                r"L/D期限",
-                "L/D",
+                r"電話番号",
+                "電話",
                 re.sub(
-                    r"T/O期限",
-                    "T/O",
-                    re.sub(
-                        r"CAT資格",
-                        "CAT資",
-                        re.sub(
-                            r"電話番号",
-                            "電話",
-                            re.sub(
-                                r"社員番号",
-                                "職番",
-                                re.sub(
-                                    r"PE(\\d{6})",
-                                    r"\\1",
-                                    re.sub(r"PE有効期限", "PE", v),
-                                ),
-                            ),
-                        ),
-                    ),
+                    r"社員番号",
+                    "職番",
+                    re.sub(r"PE([0-9]{6})", r"\1", re.sub(r"PE有効期限", "PE", v)),
                 ),
             )
             for v in hdr

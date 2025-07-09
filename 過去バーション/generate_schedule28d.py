@@ -1,81 +1,53 @@
-#!/usr/bin/env python3
-# === generate_schedule29.py ===
+# !/usr/bin/env python3
+# === generate_schedule28d.py ===
 
 import pandas as pd
 import re
 import csv
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 from openpyxl.styles import Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
+from openpyxl import load_workbook
 import warnings
 
-# ------------------------------------------
-# 警告抑制設定
-# ------------------------------------------
-# openpyxl のスタイルシート関連の警告をまとめて無視
 warnings.filterwarnings(
     "ignore", category=UserWarning, module="openpyxl.styles.stylesheet"
 )
 
-# ── Helpers: 補助関数群 ──────────────────────────────────────────────────
+# ==== Helpers ====
 
 
 def load_sim_slot_excel(file):
     """
-    SIM Slot Excel ファイルを pandas.DataFrame として読み込むユーティリティ関数。
-
-    本関数はローカル実行と Streamlit 実行の両方に対応:
-      1. file が文字列の場合 → ローカルファイルパスを直接読み込む
-      2. それ以外 (Streamlit UploadedFile) → BytesIO 経由で読み込む
-
-    Args:
-        file (str or UploadedFile):
-            - str: ローカル環境での Excel ファイルパス
-            - UploadedFile: Streamlit アップロードオブジェクト
-
-    Returns:
-        pandas.DataFrame:
-            - 読み込みに成功した場合: SIM Slot のデータ
-            - 失敗した場合: 空の DataFrame
+    SIM Slot ExcelファイルをDataFrameとして読み込む（Streamlitまたはローカル兼用）
+    :param file: ファイルパスまたはStreamlitのアップロードファイルオブジェクト
+    :return: pandas.DataFrame
     """
-    import pandas as _pd
-    import io as _io
+    import pandas as pd
+    import io
 
     try:
         if isinstance(file, str):
-            # ローカルパスから直接読み込み (ヘッダーは3行目)
-            df = _pd.read_excel(file, header=2)
+            # ローカルファイルとして読み込み
+            df = pd.read_excel(file, header=2)
         else:
-            # StreamlitのアップロードオブジェクトをBytesIO経由で読み込み
-            raw = file.read()
-            df = _pd.read_excel(_io.BytesIO(raw), header=2)
+            # Streamlitアップロードファイルを読み込み
+            df = pd.read_excel(io.BytesIO(file.read()), header=2)
 
-        # 読み込んだ行数をログとして表示
         print(f"[INFO] SIM Slot: {len(df)} 行を読み込みました")
         return df
 
     except Exception as e:
-        # 読み込み失敗時はエラーログを出力し、空 DataFrame を返却
-        print(f"[ERROR] SIM Slot Excel 読み込み失敗: {e}")
-        return _pd.DataFrame()
+        print(f"[ERROR] SIM Slot Excel読込失敗: {e}")
+        return pd.DataFrame()
 
 
-def load_simslot_schedule_codes(
-    pref_file_path="PREF.xlsx", sheet_name="SIMSLOT"
-) -> list:
+def load_simslot_schedule_codes(pref_file_path="PREF.xlsx", sheet_name="SIMSLOT"):
     """
-    PREF.xlsx の SIMSLOT シートから ActivityTypeCode のリストを取得する。
-
-    - シート名が存在しない場合は空リストを返却
-    - B1 セルにカンマ区切りでコードが設定されている想定
-
-    Args:
-        pref_file_path (str): 設定ファイルのパス
-        sheet_name (str): 読み込むシート名 (デフォルト "SIMSLOT")
-
-    Returns:
-        list: 有効なコードのリスト
+    PREF.xlsx の SIMSLOT シートから B1 にあるカンマ区切りのコード群を取得し、リストとして返す。
     """
+    from openpyxl import load_workbook
+
     try:
         wb = load_workbook(pref_file_path, data_only=True)
         if sheet_name not in wb.sheetnames:
@@ -88,7 +60,6 @@ def load_simslot_schedule_codes(
             print("✅ B1セルが空です")
             return []
 
-        # カンマ区切りの文字列を分割し、前後空白を除去
         return [code.strip() for code in str(b1_value).split(",") if code.strip()]
 
     except Exception as e:
@@ -96,59 +67,21 @@ def load_simslot_schedule_codes(
         return []
 
 
-def clean_cell(text: any) -> str:
-    """
-    セル内の文字列を正規化・クリーンアップする関数。
-
-    処理内容:
-      1. NaN / None を検出して空文字列に変換
-      2. ゼロ幅スペースや NBSP、タブ、改行などの不可視文字を削除
-      3. 文字列の前後の余分なスペースをトリム
-      4. 最終的に空白のみの文字列は空文字列に統一
-
-    Args:
-        text: 任意の型で渡されるセルの元データ
-
-    Returns:
-        str: クリーンアップ後の文字列
-    """
-    import pandas as _pd
-    import re as _re
-
-    # 1) NaN / None を空文字に
-    if _pd.isna(text):
-        return ""
-    s = str(text)
-    # 2) 不可視文字や改行をすべて削除
-    s = _re.sub(r"[\u200b\u200c\u200d\u2060\uFEFF\u00A0\t\r\n]", "", s)
-    # 3) 前後のスペースをトリム
-    s = s.strip()
-    # 4) 空文字か判定
-    return s if s else ""
+def clean_cell(text):
+    return re.sub(
+        r"[\u200b\u200c\u200d\u2060\uFEFF\u00A0\t\r\n]", "", str(text)
+    ).strip()
 
 
-def remove_blank_and_ob(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    DataFrame から不要な行を除去する関数。
-
-    - 完全に空文字列の行を削除
-    - 全セルが "" または "OB" のみの行を削除（Out-of-Bounds を想定）
-    - 特定の Emp ID を含む行も除外可能（skip_ids を設定）
-
-    Args:
-        df: セルが文字列化され、クリーニング済みの pandas DataFrame
-
-    Returns:
-        pd.DataFrame: 空行と OB 行、特定 Emp ID 行を除去した DataFrame
-    """
-    # 除外する Emp ID のセット (例として3IDを設定)
+def remove_blank_and_ob(df):
+    rows = []
+    # 除外したいEmp IDのセット
     skip_ids = {"00049292", "00035957", "00041169"}
 
-    rows = []
     for row in df.values:
         texts = [str(x).strip() for x in row]
 
-        # 1) OB の既存ロジック: 99xxx 系や全 OB 行、末尾に OB が続く行を除去
+        # ── 1) 元のOB判定ロジック ──────────────────────────────────────────────
         if any(re.fullmatch(r"00099[0-9]{3}", t) for t in texts):
             continue
         if all(not t or t == "OB" for t in texts):
@@ -156,7 +89,7 @@ def remove_blank_and_ob(df: pd.DataFrame) -> pd.DataFrame:
         if re.fullmatch(r"[A-Z]+OB", texts[0]):
             continue
 
-        # 2) 追加: 特定 Emp ID を含む行をスキップ
+        # ── 2) 追加：特定Emp IDを含む行はスキップ ────────────────────────────────────
         if any(t in skip_ids for t in texts):
             continue
 
@@ -165,29 +98,12 @@ def remove_blank_and_ob(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=df.columns)
 
 
-def find_header_rows(df: pd.DataFrame) -> list:
-    """
-    ヘッダー行を検出する関数。
-
-    - 列0: 姓名+2レターが大文字英字で構成されるセル
-    - 列2: 2レター (2文字の大文字英字)
-    - 次行に日付行 (01～31の数値) が存在する
-
-    Args:
-        df (pd.DataFrame): クリーン済みの DataFrame
-
-    Returns:
-        list: ヘッダー行のインデックス一覧
-    """
+def find_header_rows(df):
     hdrs = []
     for i in range(len(df) - 1):
-        # 現行の1列目と3列目（0-indexed）をチェック
         c0 = str(df.iat[i, 0]).strip()
         c2 = str(df.iat[i, 2]).strip() if df.shape[1] > 2 else ""
-        # 次行をリスト化して日付候補を確認
         next_row = [str(df.iat[i + 1, j]).strip() for j in range(df.shape[1])]
-
-        # 条件: c0 が 2文字以上大文字、c2 が 2文字大文字、次行に日付あり
         if (
             re.fullmatch(r"[A-Z]{2,}", c0)
             and re.fullmatch(r"[A-Z]{2}", c2)
@@ -199,343 +115,249 @@ def find_header_rows(df: pd.DataFrame) -> list:
     return hdrs
 
 
-def slice_blocks(df: pd.DataFrame) -> list:
-    """
-    ヘッダー／日付／スケジュール行ブロックを切り出す関数。
-
-    ヘッダ行から次のヘッダ行までを1ブロックとして扱い、
-    日付行位置とスケジュール列番号を算出する。
-
-    Args:
-        df (pd.DataFrame): クリーン済みの DataFrame
-
-    Returns:
-        list of tuples: (header_idx, date_idx, end_idx, date_columns)
-    """
+def slice_blocks(df):
     hdrs = find_header_rows(df)
     blocks = []
     total = len(df)
-
     for idx, h in enumerate(hdrs):
-        # 次のヘッダー行または末尾までを範囲とする
         end = hdrs[idx + 1] if idx + 1 < len(hdrs) else total
-        date_idx = h + 1
-        # 最初の候補日付行が正しくなければ、次の行も探索
-        vals = [str(df.iat[date_idx, j]).strip() for j in range(df.shape[1])]
+        d = h + 1
+        vals = [str(df.iat[d, j]).strip() for j in range(df.shape[1])]
         if not any(re.fullmatch(r"(0?[1-9]|[12][0-9]|3[01])", v) for v in vals if v):
             for r in range(h + 1, end):
                 tmp = [str(df.iat[r, j]).strip() for j in range(df.shape[1])]
                 if all(re.fullmatch(r"(0?[1-9]|[12][0-9]|3[01])", v) for v in tmp if v):
-                    date_idx = r
+                    d = r
                     break
-        # 日付列インデックス群を取得
         date_cols = [
             j
             for j, v in enumerate(
-                [str(df.iat[date_idx, k]).strip() for k in range(df.shape[1])]
+                [str(df.iat[d, j]).strip() for j in range(df.shape[1])]
             )
             if re.fullmatch(r"(0?[1-9]|[12][0-9]|3[01])", v)
         ]
-
-        blocks.append((h, date_idx, end, date_cols))
+        blocks.append((h, d, end, date_cols))
     return blocks
 
 
-def load_pref_rules(file: str = "PREF.xlsx", sheet_name: str = "色分け設定") -> list:
-    """
-    色分けルールを Excel から読み込む。
-
-    - シート2行目以降をルールとして取得
-    - ENABLE が YES の行のみ有効
-    - 6列目のセル背景色を取得し、カラーコードとして保存
-
-    Args:
-        file (str): 設定ファイルパス
-        sheet_name (str): シート名
-
-    Returns:
-        list of dict: 各ルール辞書を返却
-    """
+def load_pref_rules(file="PREF.xlsx", sheet_name="色分け設定"):
     from openpyxl import load_workbook
 
-    wb = load_workbook(file, data_only=True)
+    wb = load_workbook(file)
+
+    # 指定されたシートが存在しない場合は空リストを返す
     if sheet_name not in wb.sheetnames:
-        print(f"[WARN] シート「{sheet_name}」が{file}に存在しません。")
+        print(f"[WARN] シート「{sheet_name}」が {file} に存在しません。")
         return []
 
     ws = wb[sheet_name]
     data = list(ws.iter_rows(min_row=2, values_only=True))
     rules = []
 
-    for idx, row in enumerate(data, start=2):
+    for i, row in enumerate(data):
         enable, first, op, second, label, _ = row[:6]
-        if str(enable).strip().upper() != "YES":
-            continue
-        # 6列目の背景色を取得
-        cell = ws.cell(row=idx, column=6)
+        cell = ws.cell(row=i + 2, column=6)  # 6列目の色取得
+        fill = cell.fill
         color = (
-            cell.fill.start_color.rgb
-            if cell.fill
-            and cell.fill.start_color
-            and cell.fill.start_color.type == "rgb"
-            else None
+            fill.start_color.rgb
+            if fill and fill.start_color and fill.start_color.type == "rgb"
+            else ""
         )
-        rules.append(
-            {
-                "first": str(first or "").strip(),
-                "second": str(second or "").strip(),
-                "op": str(op or "").strip().upper(),
-                "label": str(label or "").strip(),
-                "color": color or "",
-            }
-        )
+        rgb_color = f"  # {color[-6:]}" if color else ""
+        if str(enable).strip().upper() == "YES":
+            rules.append(
+                {
+                    "first": str(first or "").strip(),
+                    "second": str(second or "").strip(),
+                    "op": str(op or "NONE").strip().upper(),
+                    "label": str(label or "").strip(),
+                    "color": rgb_color,
+                }
+            )
     return rules
 
 
-# ── 5) ルール適用ロジック ─────────────────────────────────────────────
-
-
-def match_rule_in_multiline(
-    text: any, rule: dict, debug_log_path: str = "debug_log.txt"
-) -> bool:
-    """
-    複数行テキストに対し、PREFルールの条件1/条件2をAND/OR論理でチェックする。
-    デバッグ情報はファイルに追記。
-
-    Args:
-        text (any): セル内の元テキスト（複数行想定）
-        rule (dict): PREFから取得したルール辞書:
-            {
-              'first': str,  # 条件1
-              'second': str, # 条件2
-              'op': 'AND'|'OR'|'NONE'
-            }
-        debug_log_path (str): デバッグログ出力先パス
-    Returns:
-        bool: ルールにマッチすれば True
-    """
+def match_rule_in_multiline(text, rule, debug_log_path="debug_log.txt"):
     lines = str(text).split("\n")
-    cond1 = rule.get("first", "")
-    cond2 = rule.get("second", "")
-    op = rule.get("op", "NONE").upper()
+    cond1 = rule["first"].strip()
+    cond2 = rule["second"].strip()
+    op = rule["op"].strip().upper()
 
     cond1_found = any(cond1 in line for line in lines) if cond1 else False
     cond2_found = any(cond2 in line for line in lines) if cond2 else False
 
-    # デバッグ情報をログファイルに追記
+    # ログをファイルに追記
     with open(debug_log_path, "a", encoding="utf-8") as f:
         f.write("\n=== DEBUG MATCH ===\n")
-        f.write(f"Text Lines: {lines}\n")
+        f.write(f"Text:\n{text}\n")
+        f.write(f"Lines: {lines}\n")
         f.write(f"Rule: {rule}\n")
-        f.write(f"cond1_found={cond1_found}, cond2_found={cond2_found}, op={op}\n")
+        f.write(f"cond1_found: {cond1_found}, cond2_found: {cond2_found}, op: {op}\n")
 
     if op == "AND":
         return cond1_found and cond2_found
-    if op == "OR":
+    elif op == "OR":
         return cond1_found or cond2_found
-    # NONE なら条件いずれかでマッチ
-    return cond1_found or cond2_found
+    else:
+        return False
 
 
-def apply_pref_rules_to_cell(
-    cell, val: any, rules: list, fallback_color: str = None
-) -> None:
+def apply_pref_rules_to_cell(cell, val, rules, fallback_color=None):
     """
-    セルの文字列に対し、PREFルールを適用して背景色を設定する。
-
-    Args:
-        cell (openpyxl.cell): Excel セルオブジェクト
-        val (any): セルに表示するスケジュール文字列
-        rules (list): load_pref_rules で取得したルールリスト
-        fallback_color (str): マッチしなかった場合に適用するデフォルトカラー
+    PREFルールに基づいてセルの背景色を設定。
+    スケジュール文字列が複数行ある場合は行ごとに正規表現判定する。
     """
     text = str(val).strip()
     lines = [line.strip() for line in text.split("\n") if line.strip()]
 
     for idx, rule in enumerate(rules):
         if not isinstance(rule, dict):
-            print(f"⚠️ 無効なルール形式 (index={idx}): {rule}")
+            print(f"⚠️ Rule  # {idx} is not a dict: {rule} (type={type(rule)})")
             continue
 
-        first = rule.get("first", "")
-        second = rule.get("second", "")
+        first = rule.get("first", "") or ""
+        second = rule.get("second", "") or ""
         op = rule.get("op", "NONE").upper()
 
-        # 行ごとに正規表現マッチ
-        cond1 = (
+        # 行単位で正規表現マッチ確認
+        cond1_found = (
             any(re.search(first, line) for line in lines)
-            if first not in (None, "")
+            if first and first != "None"
             else False
         )
-        cond2 = (
+        cond2_found = (
             any(re.search(second, line) for line in lines)
-            if second not in (None, "")
+            if second and second != "None"
             else False
         )
 
-        if (
-            (op == "AND" and cond1 and cond2)
-            or (op == "OR" and (cond1 or cond2))
-            or (op == "NONE" and (cond1 or cond2))
-        ):
-            color = rule.get("color", "").lstrip("#")
-            cell.fill = PatternFill(fill_type="solid", fgColor=color)
+        if op == "AND" and cond1_found and cond2_found:
+            cell.fill = PatternFill(
+                fill_type="solid", fgColor=rule["color"].replace("  # ", "")
+            )
+            return
+        elif op == "OR" and (cond1_found or cond2_found):
+            cell.fill = PatternFill(
+                fill_type="solid", fgColor=rule["color"].replace("  # ", "")
+            )
+            return
+        elif op == "NONE" and (cond1_found or cond2_found):
+            cell.fill = PatternFill(
+                fill_type="solid", fgColor=rule["color"].replace("  # ", "")
+            )
             return
 
-    # どのルールにもマッチしない場合、フォールバック色を設定
+    # どのルールにもマッチしなかった場合のデフォルト色
     if fallback_color:
         cell.fill = PatternFill(fill_type="solid", fgColor=fallback_color)
 
 
-# ── 6) Excel 出力: 行ごとの書込み ─────────────────────────────────────────
-
-
 def write_onboard_rows(
     ws,
-    start_row: int,
-    onboard_data: list,
-    emp_aff_map: dict,
-    name_to_emp: dict,
-    block_aff: str,
-    self_name: str,
-    name_to_row: dict,
-) -> int:
-    """
-    同乗クルー情報を Excel に行単位で書き込む。
-
-    Args:
-        ws: openpyxl ワークシートオブジェクト
-        start_row: 書込み開始行番号
-        onboard_data (list): 各日付の同乗者名リスト
-        emp_aff_map (dict): EmpNo→所属マップ
-        name_to_emp (dict): レコード名→EmpNo マップ
-        block_aff (str): 現在のブロックの所属
-        self_name (str): 本人の表示名
-        name_to_row (dict): 名前→Excel行番号マップ
-
-    Returns:
-        int: 書き込んだ同乗行数（可変）
-    """
-    max_onb = max((len(day) for day in onboard_data if day), default=0)
+    start_row,
+    onboard_data,
+    emp_aff_map,
+    name_to_emp,
+    block_aff,
+    self_name,
+    name_to_row,
+):
+    max_onb = max((len(day) for day in onboard_data if day), default=1)
     for i in range(max_onb):
         for j, names in enumerate(onboard_data, start=1):
+            # 元の値（例: "I末継HI" / "T田中AB" / "佐藤CD"）
             display = names[i] if i < len(names) else ""
             cell = ws.cell(row=start_row + i, column=j)
 
-            # リンク設定: 先頭文字(I/T)を除去して行参照
-            raw = display[1:] if display.startswith(("I", "T")) else display
-            target = name_to_row.get(raw)
-            if display and target:
-                cell.value = f'=HYPERLINK("#A{target}", "{display}")'
+            # プレフィックスを外したキーを探す
+            if display.startswith(("I", "T")):
+                raw_name = display[1:]  # 先頭1文字(I/T)を削除
+            else:
+                raw_name = display
+
+            # リンク先行番号を name_to_row から探す
+            target_row = name_to_row.get(raw_name)
+            if display and target_row:
+                # 表示はプレフィックス付き、リンク先は raw_name のスケジュール行
+                cell.value = f'=HYPERLINK("  # A{target_row}", "{display}")'
             else:
                 cell.value = display
-            # 書式設定: 左上揃え + 折返し
+
+            # 既存の書式設定
             cell.alignment = Alignment(
                 horizontal="left", vertical="top", wrap_text=True
             )
-
-            # 同ブロック所属ならハイライト
-            emp_no = name_to_emp.get(raw)
-            if display and emp_no and emp_aff_map.get(emp_no) == block_aff:
-                cell.fill = PatternFill(fill_type="solid", fgColor="FFEE99")
+            if display:
+                emp = name_to_emp.get(raw_name)
+                if emp and emp_aff_map.get(emp) == block_aff:
+                    cell.fill = PatternFill(fill_type="solid", fgColor="FFEE99")
     return max_onb
 
 
-def write_to_excel(
-    records: list, emp_aff_map: dict, out_xlsx: str, pref_rules: list
-) -> None:
-    """
-    全レコードを Excel ファイルに書き出す。
+def write_to_excel(records, emp_aff_map, out_xlsx, pref_rules):
+    from openpyxl import Workbook
 
-    - ヘッダー行／日付行／スケジュール行／同乗行を順次配置
-    - apply_pref_rules_to_cell でセル背景色を設定
-
-    Args:
-        records (list): レコード辞書リスト (hdr, dr, sched, onb, aff など)
-        emp_aff_map (dict): EmpNo→所属マップ
-        out_xlsx (str): 出力ファイルパス
-        pref_rules (list): 色分けルールリスト
-    """
     wb = Workbook()
     ws = wb.active
 
-    # 名前→EmpNo, 名前→行番号 マップ作成
     name_to_emp = {rec["hdr"][0]: rec["emp_no"] for rec in records}
     name_to_row = {}
-    row = 1
+    row_counter = 1
     for rec in records:
-        row += 3 + max((len(x) for x in rec.get("onb", [])), default=0)
-        name_to_row[rec["hdr"][0]] = row
+        row_counter += 3 + max((len(x) for x in rec.get("onb", [])), default=1)
+        name_to_row[rec["hdr"][0]] = row_counter
 
-    # レコードごとに行書込みループ
-    current_row = 1
+    row_num = 1
     for rec in records:
-        # ── ヘッダー行（電話番号とPE番号のみ折り返しオフ、PE番号は縮小表示） ──
-        for col, val in enumerate(rec["hdr"], start=1):
-            cell = ws.cell(row=current_row, column=col, value=val)
+        block_aff = rec["aff"]
+        self_name = rec["hdr"][0]
 
-            # 電話番号らしい文字列（例：03-1234-5678 や 「電話」）かどうか
-            is_phone = bool(re.search(r"\d{2,4}-\d{2,4}-\d{4}", val)) or "電話" in val
-            # PExxxxxx 形式かどうか
-            is_pe = bool(re.fullmatch(r"PE\d{6}", val))
-
+        for j, val in enumerate(rec["hdr"], start=1):
+            cell = ws.cell(row=row_num, column=j, value=val)
+            wrap = not bool(re.fullmatch(r"0[0-9]{1,}-[0-9]+-[0-9]{4}", val))
             cell.alignment = Alignment(
-                horizontal="left",
-                vertical="top",
-                wrap_text=not (is_phone or is_pe),  # 電話番号・PE番号は折り返しオフ
-                shrink_to_fit=is_pe,  # PE番号のみ縮小表示
+                horizontal="left", vertical="top", wrap_text=wrap
             )
             cell.border = Border(
-                top=Side(border_style="double"), bottom=Side(border_style="double")
+                top=Side(border_style="double", color="000000"),
+                bottom=Side(border_style="double", color="000000"),
             )
-        # 日付行
-        for col, dv in enumerate(rec["dr"], start=1):
-            cell = ws.cell(row=current_row + 1, column=col, value=dv)
+
+        for j, date_val in enumerate(rec["dr"], start=1):
+            sched_val = rec["sched"][j - 1] if j - 1 < len(rec["sched"]) else ""
+            cell = ws.cell(row=row_num + 1, column=j, value=date_val)
             cell.alignment = Alignment(
                 horizontal="center", vertical="center", wrap_text=True
             )
             apply_pref_rules_to_cell(
-                cell, rec["sched"][col - 1], pref_rules, fallback_color="DDDDDD"
+                cell, sched_val, pref_rules, fallback_color="DDDDDD"
             )
 
-        # スケジュール行
-        for col, sv in enumerate(rec["sched"], start=1):
-            cell = ws.cell(row=current_row + 2, column=col, value=sv)
+        for j, val in enumerate(rec["sched"], start=1):
+            cell = ws.cell(row=row_num + 2, column=j, value=val)
             cell.alignment = Alignment(
                 horizontal="left", vertical="top", wrap_text=True
             )
 
-        # 同乗行
         onboard_count = write_onboard_rows(
             ws,
-            current_row + 3,
+            row_num + 3,
             rec.get("onb", []),
             emp_aff_map,
             name_to_emp,
-            rec.get("aff"),
-            rec["hdr"][0],
+            block_aff,
+            self_name,
             name_to_row,
         )
-        current_row += 3 + onboard_count
+        row_num += 3 + onboard_count
 
-    # 最後にファイル保存
     wb.save(out_xlsx)
 
 
-def run(
-    schedule_file, pref_file="PREF.xlsx", sim_file="SIM Slot List 202507.xlsx"
-) -> tuple[str, str]:
-    """
-    メイン実行関数: スケジュールCSV を読み込み、整形した CSV と Excel を出力する。
+# その他 main 関数などは既存通り（適宜 pref_rules を渡すようにする）
 
-    Args:
-        schedule_file (str or UploadedFile): スケジュール CSV のファイルパスまたは Streamlit アップロードオブジェクト
-        pref_file (str): PREF 設定ファイル (PREF.xlsx) のパス
-        sim_file (str): SIM Slot List Excel ファイルのパス
 
-    Returns:
-        tuple[str, str]: 出力された CSV ファイル名と Excel ファイル名
-    """
+def run(schedule_file, pref_file="PREF.xlsx", sim_file="SIM Slot List 202507.xlsx"):
     import pandas as pd
     import re
     import csv
@@ -543,25 +365,29 @@ def run(
     from openpyxl.styles import Alignment, PatternFill, Border, Side
     from openpyxl.utils import get_column_letter
 
-    # ── 1) 入力ファイル読み込み ─────────────────────────────────────────
-    # スケジュール CSV を読み込み、空セルを空文字に置換
+    # ── 1) 入力ファイル読み込み ──────────────────────────────────────────────
     sched = pd.read_csv(schedule_file, header=None, dtype=str).fillna("")
-    # 従来 emp_no.csv の代わりに PREF.xlsx の emp_no シートを使用
+    # emp_no.csv の代わりに、PREF.xlsx 内シート "emp_no" を読み込む
     emp_df = pd.read_excel(
-        pref_file, sheet_name="emp_no", header=None, dtype=str
+        pref_file,
+        sheet_name="emp_no",  # emp_no シートを作っておいてください
+        header=None,  # CSV と同じ形式であればヘッダーなし
+        dtype=str,
     ).fillna("")
-    # 色分けルールと SIM Slot コードリストを取得
     pref_rules = load_pref_rules(pref_file)
     simslot_codes = load_simslot_schedule_codes(pref_file)
 
-    # ── 2) 社員情報マップ作成 ─────────────────────────────────────────
-    # emp_df から各種マップを生成: 氏名、2レター、所属、背景設定列
+    # ── 2) 社員マップ作成 ─────────────────────────────────────────────────
     emp_name_map = {row[2]: row[4] for _, row in emp_df.iterrows()}
     emp_two_map = {row[2]: row[6] for _, row in emp_df.iterrows()}
     emp_aff_map = {row[2]: row[0] for _, row in emp_df.iterrows()}
     emp_col8_map = {row[2]: row[7] for _, row in emp_df.iterrows()}
     emp_order = emp_df.iloc[:, 2].tolist()
-    # 養成期 (D 列) と Phase (H 列) のマッピング
+    # ── 追加：職員番号→養成期マップを作成（D列 = インデックス3）
+    phase_map = {
+        str(row[2]).strip(): str(row[3]).strip() for _, row in emp_df.iterrows()
+    }
+    # ── 追加：D列（インデックス3）=養成期、H列（インデックス7）=Phase のマップ作成
     phase_d_map = {
         str(row[2]).strip(): str(row[3]).strip() for _, row in emp_df.iterrows()
     }
@@ -569,39 +395,42 @@ def run(
         str(row[2]).strip(): str(row[7]).strip() for _, row in emp_df.iterrows()
     }
 
-    # ── 3) 元データ整形 ────────────────────────────────────────────
-    # セルクリーンと空行・OB 行削除
+    # ── 3) 元データ整形 ──────────────────────────────────────────────────
     df = sched.copy().map(clean_cell).pipe(remove_blank_and_ob)
-    # ヘッダー・日付・スケジュール行ブロックを抽出
     blocks = slice_blocks(df)
     if not blocks:
         return
     global_dates = blocks[0][3]
 
-    # ── 4) SIM Slot 実績読み込み & 参加者辞書作成 ────────────────────────
+    # ── 4) SIM Slot 実績読み込み＆参加者辞書作成 ──────────────────────────
+    # ── 4) SIM Slot 実績読み込み＆参加者辞書作成 ──────────────────────────
+    # SIM Slot List ファイルの先頭シート名を動的に取得して読み込む
+
     wb_sim = load_workbook(sim_file, read_only=True, data_only=True)
     first_sheet = wb_sim.sheetnames[0]
     sim_df = pd.read_excel(
         sim_file, sheet_name=first_sheet, header=2, dtype=str
     ).fillna("")
     sim_df = sim_df[sim_df["ActivityTypeCode"].isin(simslot_codes)]
-    # 各種列を整形
     sim_df["Event Name"] = sim_df["Event Name"].fillna("").astype(str).str.strip()
     sim_df["日付"] = pd.to_datetime(sim_df["日付"], format="%Y/%m/%d", errors="coerce")
     sim_df["day"] = sim_df["日付"].dt.day.astype(int)
     sim_df["教官 Emp ID"] = sim_df["教官 Emp ID"].str.split("/", expand=False)
     sim_df["訓練生 Emp ID"] = sim_df["訓練生 Emp ID"].str.split("/", expand=False)
+
     teacher_lookup = {}
     trainee_lookup = {}
     simslot_participants = {}
-    machine_col = sim_df.columns[1]
+    machine_col = sim_df.columns[1]  # B列
+
     for _, row in sim_df.iterrows():
         day = row["day"]
         act_code = row["ActivityTypeCode"].strip()
         evt_code = row["Event Name"]
         start = row["開始時刻"]
         end = row["終了時刻"]
-        # ルックアップ辞書に時刻を登録
+
+        # 時刻ルックアップ辞書
         for eid in row["教官 Emp ID"]:
             eid5 = eid.strip()[-5:]
             if eid5:
@@ -610,20 +439,26 @@ def run(
             eid5 = eid.strip()[-5:]
             if eid5:
                 trainee_lookup[(day, eid5)] = (start, end)
-        # 号機情報を取得
+
+        # 号機情報取得
         raw_m = str(row[machine_col]).strip()
-        if raw_m in ("", "APT"):
+        if raw_m == "" or raw_m.upper() == "APT":
             machine = "APT"
         elif raw_m == "1":
-            machine = "#1"
+            machine = "  # 1"
         elif raw_m == "2":
-            machine = "#2"
+            machine = "  # 2"
         else:
             machine = raw_m
-        # コード群を生成 (ActivityTypeCode + Event Name)
-        codes = [act_code] + ([evt_code] if evt_code and evt_code != act_code else [])
+
+        # 登録対象コード群(ActivityTypeCode + Event Name)
+        codes = [act_code]
+        if evt_code and evt_code != act_code:
+            codes.append(evt_code)
+
         teachers = [eid.strip()[-5:] for eid in row["教官 Emp ID"] if eid.strip()]
         trainees = [eid.strip()[-5:] for eid in row["訓練生 Emp ID"] if eid.strip()]
+
         for code_key in codes:
             key = (day, code_key, start, end, machine)
             simslot_participants.setdefault(
@@ -631,27 +466,33 @@ def run(
             )
             simslot_participants[key]["teachers"].extend(teachers)
             simslot_participants[key]["trainees"].extend(trainees)
-    # 重複 ID を削除
-    for grp in simslot_participants.values():
-        grp["teachers"] = list(dict.fromkeys(grp["teachers"]))
-        grp["trainees"] = list(dict.fromkeys(grp["trainees"]))
 
-    # ── 5) records 作成 ─────────────────────────────────────────────────
+    for parts in simslot_participants.values():
+        parts["teachers"] = list(dict.fromkeys(parts["teachers"]))
+        parts["trainees"] = list(dict.fromkeys(parts["trainees"]))
+    # ───────────────────────────────────────────────────────────────────
+
+    # ── 5) records 作成（新フェーズロジック対応版） ────────────────────────────────
     records = []
     for h, d, end, dates in blocks:
+        # ヘッダー行の生データ取得
         raw = [clean_cell(x) for x in df.iloc[h]]
-        matched = [v for v in raw if re.fullmatch(r"000\d{5}", v)]
+        matched = [v for v in raw if re.fullmatch(r"000[0-9]{5}", v)]
         code = matched[0][3:] if matched else ""
         surname = emp_name_map.get(code, clean_cell(df.iat[h, 0]))
         two = emp_two_map.get(code, clean_cell(df.iat[h, 2]))
         rec_aff = emp_aff_map.get(code, "")
         raw[0] = f"{surname}{two}" if matched else raw[0]
 
-        hdr_vals = [v for v in raw if v]
-        hdr = hdr_vals[:31] + [""] * (31 - len(hdr_vals[:31]))
-        # 養成期/Phase 表示を設定
+        # ヘッダー部分30列＋所属31列目まで確保
+        vals = [v for v in raw if v]
+        hdr = vals[:31] + [""] * (31 - len(vals[:31]))
+
+        # 追加：D列／H列からのフェーズ表示
+        # phase_d_map：D列（養成期）、phase_h_map：H列（Phase）
         raw_d = phase_d_map.get(code, "").strip()
         raw_h = phase_h_map.get(code, "").strip()
+
         if raw_d and not raw_d.isdigit():
             # D列がアルファベット系のとき
             if raw_d == "B":
@@ -674,34 +515,16 @@ def run(
         hdr[29] = display
         hdr[30] = rec_aff
 
-        # ── セル内文字列整形ルール (まとめて置換) ───────────────────────────────────
-        # 「PE有効期限」→「PE」, 「PExxxxxx」→「xxxxxx」
+        # 「PE有効期限」→「PE」, 「PExxxxxx」→「xxxxxx」,
         # 「社員番号」→「職番」, 「電話番号」→「電話」
-        # 「CAT資格」→「CAT資」, 「T/O期限」→「T/O」, 「L/D期限」→「L/D」
         hdr = [
             re.sub(
-                r"L/D期限",
-                "L/D",
+                r"電話番号",
+                "電話",
                 re.sub(
-                    r"T/O期限",
-                    "T/O",
-                    re.sub(
-                        r"CAT資格",
-                        "CAT資",
-                        re.sub(
-                            r"電話番号",
-                            "電話",
-                            re.sub(
-                                r"社員番号",
-                                "職番",
-                                re.sub(
-                                    r"PE(\\d{6})",
-                                    r"\\1",
-                                    re.sub(r"PE有効期限", "PE", v),
-                                ),
-                            ),
-                        ),
-                    ),
+                    r"社員番号",
+                    "職番",
+                    re.sub(r"PE([0-9]{6})", r"\1", re.sub(r"PE有効期限", "PE", v)),
                 ),
             )
             for v in hdr
