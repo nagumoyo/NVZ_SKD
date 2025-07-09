@@ -542,6 +542,7 @@ def run(
     from openpyxl import load_workbook
     from openpyxl.styles import Alignment, PatternFill, Border, Side
     from openpyxl.utils import get_column_letter
+    from datetime import datetime  # 追加: 日付文字列生成用
 
     # ── 1) 入力ファイル読み込み ─────────────────────────────────────────
     # スケジュール CSV を読み込み、空セルを空文字に置換
@@ -876,17 +877,21 @@ def run(
         ),
     )
 
-    # ── 10) 出力 ─────────────────────────────────────────────────────
-    out_csv = "formatted_schedule.csv"
+    # 日付文字列取得 (Asia/Tokyo)
+    today = datetime.now().strftime("%Y%m%d")
+    out_csv = f"SKDFILE{today}.csv"
+    out_xlsx = f"SKDFILE{today}.xlsx"
+
+    # CSV 出力
     with open(out_csv, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         for rec in records:
             w.writerow(rec["hdr"])
             w.writerow(rec["dr"])
             w.writerow(rec["sched"])
-            w.writerow(["\n".join(x) for x in rec["onb"]])
+            w.writerow(["\n".join(x) for x in rec.get("onb", [])])
 
-    out_xlsx = "formatted_schedule20.xlsx"
+    # Excel 出力
     write_to_excel(records, emp_aff_map, out_xlsx, pref_rules)
     return out_csv, out_xlsx
 
