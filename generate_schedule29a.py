@@ -1,23 +1,13 @@
 #!/usr/bin/env python3
-# === generate_schedule30.py ===
+# === generate_schedule29.py ===
 
 import pandas as pd
 import re
 import csv
-import xlsxwriter
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 import warnings
-import logging
-
-# ロガー設定（冒頭に記載）
-logging.basicConfig(
-    filename="simslot_debug.log",
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
-logger = logging.getLogger(__name__)
 
 # ------------------------------------------
 # 警告抑制設定
@@ -535,9 +525,6 @@ def write_to_excel(
 def run(
     schedule_file, pref_file="PREF.xlsx", sim_file="SIM Slot List 202507.xlsx"
 ) -> tuple[str, str]:
-    print(f"[DEBUG] schedule_file: {schedule_file}")
-    print(f"[DEBUG] pref_file: {pref_file}")
-    print(f"[DEBUG] sim_file: {sim_file}")  # これでファイル名確認可能
     """
     メイン実行関数: スケジュールCSV を読み込み、整形した CSV と Excel を出力する。
 
@@ -559,16 +546,7 @@ def run(
 
     # ── 1) 入力ファイル読み込み ─────────────────────────────────────────
     # スケジュール CSV を読み込み、空セルを空文字に置換
-    # ── 1) スケジュールファイル読み込み（堅牢版） ──────────────────────
-    with open(schedule_file, "r", encoding="utf-8") as f:
-        lines = [line.rstrip("\n").split(",") for line in f]
-
-    max_cols = max(len(line) for line in lines)
-    lines = [line + [""] * (max_cols - len(line)) for line in lines]
-
-    import pandas as pd
-
-    sched = pd.DataFrame(lines).fillna("")
+    sched = pd.read_csv(schedule_file, header=None, dtype=str).fillna("")
     # 従来 emp_no.csv の代わりに PREF.xlsx の emp_no シートを使用
     emp_df = pd.read_excel(
         pref_file, sheet_name="emp_no", header=None, dtype=str
@@ -595,127 +573,58 @@ def run(
     # ── 3) 元データ整形 ────────────────────────────────────────────
     # セルクリーンと空行・OB 行削除
     df = sched.copy().map(clean_cell).pipe(remove_blank_and_ob)
-
-    # OBなどヘッダーだけでスケジュールが存在しない行を除外（NEW）
-    def remove_ob_only_headers(df):
-        def is_valid_header(idx):
-            if idx + 1 >= len(df):  # 次行が存在しない
-                return False
-            next_row = df.iloc[idx + 1]
-            # 次の行に日付らしき01〜31が5つ以上あるか
-            has_date = (
-                next_row.astype(str).str.match(r"^(0[1-9]|[12][0-9]|3[01])$").sum() >= 5
-            )
-            return has_date
-
-        # ヘッダーだけの行や列数が極端に少ない行を除外
-        mask = [is_valid_header(i) or df.iloc[i].count() > 30 for i in range(len(df))]
-        return df[mask]
-
-    # ↑ 上記のフィルタ関数を適用
-    df = remove_ob_only_headers(df)
-
-    # ブロック抽出
+    # ヘッダー・日付・スケジュール行ブロックを抽出
     blocks = slice_blocks(df)
     if not blocks:
         return
     global_dates = blocks[0][3]
 
     # ── 4) SIM Slot 実績読み込み & 参加者辞書作成 ────────────────────────
-    from datetime import datetime
-
-    # Excelブックを開いて1つ目のシート名を取得
     wb_sim = load_workbook(sim_file, read_only=True, data_only=True)
     first_sheet = wb_sim.sheetnames[0]
-
-    # 3行目（index=2）を列名、4行目以降をデータとして読み込む
     sim_df = pd.read_excel(
         sim_file, sheet_name=first_sheet, header=2, dtype=str
     ).fillna("")
-
-    logger.info(f"SIM Slot 列名一覧: {list(sim_df.columns)}")
-    logger.info(f"SIM Slot 読み込み行数: {len(sim_df)}")
-    logger.debug(f"SIM Slot 先頭5行:\n{sim_df.head()}")
-
-    # 列名の標準化： '日付' → 'day'
-    if "日付" in sim_df.columns:
-        sim_df.rename(columns={"日付": "day"}, inplace=True)
-        print("✔ '日付' 列を 'day' にリネームしました")
-    else:
-        print("❌ '日付' 列が見つかりません")
-        sim_df["day"] = pd.NA  # フォールバック定義
-
-    # Event Name列（存在しない場合もある）
-    sim_df["Event Name"] = sim_df.get("Event Name", "").astype(str).str.strip()
-
-    # 'day'列をdatetimeに変換し日部分だけを抽出（Int64でNAも保持）
-    if "day" in sim_df.columns:
-        try:
-            sim_df["day"] = pd.to_datetime(
-                sim_df["day"], errors="coerce"
-            ).dt.day.astype("Int64")
-        except Exception:
-            pass  # 既にInt64変換済みならスルー
-
-    # ID列をリストに変換（"/" 区切り）
-    sim_df["教官 Emp ID"] = sim_df.get("教官 Emp ID", "").str.split("/", expand=False)
-    sim_df["訓練生 Emp ID"] = sim_df.get("訓練生 Emp ID", "").str.split(
-        "/", expand=False
-    )
-
-    # A350: 空欄 → APT ／ 787: '1','2','7','8' → #番号 に変換する補助関数
-    def get_machine(raw):
-        if pd.isna(raw) or str(raw).strip() == "":
-            return "APT"
-        raw = str(raw).strip()
-        if raw in {"1", "2", "7", "8"}:
-            return f"#{raw}"
-        return raw
-
-    # ActivityTypeCode列の存在チェックとフィルタリング
-    if "ActivityTypeCode" not in sim_df.columns:
-        raise ValueError("SIMファイルに 'ActivityTypeCode' 列が存在しません。")
-
-    logger.info(f"フィルタ前 SIM Slot 件数: {len(sim_df)}")
-    logger.info(f"フィルタ条件: {simslot_codes}")
-
-    # フィルタ適用
     sim_df = sim_df[sim_df["ActivityTypeCode"].isin(simslot_codes)]
-
-    logger.info(f"フィルタ後 SIM Slot 件数: {len(sim_df)}")
-
-    # 号機の列は "号機" or "機番" など変動する場合はB列（index=1）を使う
-    machine_col = sim_df.columns[1]
-
-    # SIM参加者辞書と各参加者→時間帯辞書を作成
+    # 各種列を整形
+    sim_df["Event Name"] = sim_df["Event Name"].fillna("").astype(str).str.strip()
+    sim_df["日付"] = pd.to_datetime(sim_df["日付"], format="%Y/%m/%d", errors="coerce")
+    sim_df["day"] = sim_df["日付"].dt.day.astype(int)
+    sim_df["教官 Emp ID"] = sim_df["教官 Emp ID"].str.split("/", expand=False)
+    sim_df["訓練生 Emp ID"] = sim_df["訓練生 Emp ID"].str.split("/", expand=False)
     teacher_lookup = {}
     trainee_lookup = {}
     simslot_participants = {}
-
+    machine_col = sim_df.columns[1]
     for _, row in sim_df.iterrows():
-        day = row.get("day")
-        act_code = row.get("ActivityTypeCode", "").strip()
-        evt_code = row.get("Event Name", "").strip()
-        start = row.get("開始時刻", "")
-        end = row.get("終了時刻", "")
-        machine = get_machine(row.get(machine_col, ""))
-
-        # ID整形（"/"区切り後の個別IDを5桁へ）
-        teachers = [
-            eid.strip()[-5:] for eid in row.get("教官 Emp ID", []) if eid.strip()
-        ]
-        trainees = [
-            eid.strip()[-5:] for eid in row.get("訓練生 Emp ID", []) if eid.strip()
-        ]
-
-        # 各IDと時間帯を lookup に登録（同一day + emp_id に対して上書き）
-        for eid in teachers:
-            teacher_lookup[(day, eid)] = (start, end)
-        for eid in trainees:
-            trainee_lookup[(day, eid)] = (start, end)
-
-        # 参加者辞書に登録（act_code単独と、act+eventが異なる場合はeventもキーに）
+        day = row["day"]
+        act_code = row["ActivityTypeCode"].strip()
+        evt_code = row["Event Name"]
+        start = row["開始時刻"]
+        end = row["終了時刻"]
+        # ルックアップ辞書に時刻を登録
+        for eid in row["教官 Emp ID"]:
+            eid5 = eid.strip()[-5:]
+            if eid5:
+                teacher_lookup[(day, eid5)] = (start, end)
+        for eid in row["訓練生 Emp ID"]:
+            eid5 = eid.strip()[-5:]
+            if eid5:
+                trainee_lookup[(day, eid5)] = (start, end)
+        # 号機情報を取得
+        raw_m = str(row[machine_col]).strip()
+        if raw_m in ("", "APT"):
+            machine = "APT"
+        elif raw_m == "1":
+            machine = "#1"
+        elif raw_m == "2":
+            machine = "#2"
+        else:
+            machine = raw_m
+        # コード群を生成 (ActivityTypeCode + Event Name)
         codes = [act_code] + ([evt_code] if evt_code and evt_code != act_code else [])
+        teachers = [eid.strip()[-5:] for eid in row["教官 Emp ID"] if eid.strip()]
+        trainees = [eid.strip()[-5:] for eid in row["訓練生 Emp ID"] if eid.strip()]
         for code_key in codes:
             key = (day, code_key, start, end, machine)
             simslot_participants.setdefault(
@@ -723,22 +632,10 @@ def run(
             )
             simslot_participants[key]["teachers"].extend(teachers)
             simslot_participants[key]["trainees"].extend(trainees)
-
-    logger.info(f"教官辞書数: {len(teacher_lookup)}")
-    logger.info(f"訓練生辞書数: {len(trainee_lookup)}")
-    logger.info(f"参加者辞書数: {len(simslot_participants)}")
-
-    # 代表例出力（最初の3件）
-    for i, (key, val) in enumerate(simslot_participants.items()):
-        if i >= 3:
-            break
-        logger.debug(
-            f"[sample {i}] KEY={key}, TEACHERS={val['teachers']}, TRAINEES={val['trainees']}, EVENT={val['event']}"
-        )
-
-    # 重複排除
+    # 重複 ID を削除
     for grp in simslot_participants.values():
         grp["teachers"] = list(dict.fromkeys(grp["teachers"]))
+        grp["trainees"] = list(dict.fromkeys(grp["trainees"]))
 
     # ── 5) records 作成 ─────────────────────────────────────────────────
     records = []
@@ -902,7 +799,7 @@ def run(
                 rec["sched"][idx] = base
     # ───────────────────────────────────────────────────────────────────
 
-    # ── 8) Phase3: onb ロジック統合（自己除外強化版） ────────────────────────
+    # ── 8) Phase3: onb ロジック統合（自己除外強化版） ───────────────────── ───────
     for i, rec in enumerate(records):
         emp_id = rec["emp_no"]
         onb = []
@@ -919,15 +816,8 @@ def run(
                 except ValueError:
                     onb.append([])
                     continue
-
                 parts = None
                 machine = None
-
-                # Debugログ：マッチング試行を記録
-                logging.debug(
-                    f"🔍 SIM マッチチェック: day={day}, code={first}, emp_id={emp_id}"
-                )
-
                 for (d, c, s, e, m), grp in simslot_participants.items():
                     if (
                         d == day
@@ -936,22 +826,10 @@ def run(
                     ):
                         parts = grp
                         machine = m
-                        logging.debug(
-                            f"✅ MATCH: key=({d}, {c}, {s}, {e}, {m}), emp_id={emp_id}"
-                        )
                         break
-                    else:
-                        logging.debug(
-                            f"… NO match: key=({d}, {c}, {s}, {e}, {m}), emp_id={emp_id} not in {grp['teachers'] + grp['trainees']}"
-                        )
-
                 if not parts:
-                    logging.debug(
-                        f"❌ NO MATCH FOUND for emp_id={emp_id}, code={first}, day={day}"
-                    )
                     onb.append([])
                     continue
-
                 names = []
                 for tid in parts["teachers"]:
                     if tid.strip() == emp_id.strip():
@@ -1022,11 +900,11 @@ if __name__ == "__main__":
     import argparse
 
     p = argparse.ArgumentParser()
-    p.add_argument("--schedule", default="schedule_787.csv")
-    p.add_argument("--pref", default="PREF_787.xlsx")
+    p.add_argument("--schedule", default="schedule.csv")
+    p.add_argument("--pref", default="PREF.xlsx")
     p.add_argument(
-        "--sim", default="SIM Slot List 202507_787.xlsx"
+        "--sim", default="SIM Slot List 202507.xlsx"
     )  # SIM Slot ファイルをオプションとして追加
 
     a = p.parse_args()
-    run(a.schedule, a.pref, a.sim)  # ← sim を明示的に渡す
+    run(a.schedule, a.pref)
