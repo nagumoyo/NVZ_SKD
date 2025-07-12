@@ -254,6 +254,62 @@ def slice_blocks(df: pd.DataFrame) -> list:
 
 def load_pref_rules(file, sheet_name: str = "色分け設定") -> list:
     """
+    色分けルールを Excel から読み込む（StreamlitのUploadedFile対応）
+
+    Args:
+        file (str or UploadedFile): 設定ファイルパス or アップロードされたファイル
+        sheet_name (str): 読み込むシート名
+
+    Returns:
+        list of dict: 条件付き色分けルール
+    """
+    from openpyxl import load_workbook
+    from io import BytesIO
+    import os
+
+    # BytesIO に変換
+    if isinstance(file, (str, bytes, os.PathLike)):
+        wb = load_workbook(filename=file, data_only=True)
+    else:
+        # StreamlitのUploadedFileをBytesIOに変換
+        bytes_io = BytesIO(file.read())
+        wb = load_workbook(filename=bytes_io, data_only=True)
+
+    if sheet_name not in wb.sheetnames:
+        print(f"[WARN] シート「{sheet_name}」が設定ファイルに存在しません。")
+        return []
+
+    ws = wb[sheet_name]
+    data = list(ws.iter_rows(min_row=2, values_only=True))
+    rules = []
+
+    for idx, row in enumerate(data, start=2):
+        enable, first, op, second, label, _ = row[:6]
+        if str(enable).strip().upper() != "YES":
+            continue
+
+        # 背景色を取得
+        cell = ws.cell(row=idx, column=6)
+        color = (
+            cell.fill.start_color.rgb
+            if cell.fill
+            and cell.fill.start_color
+            and cell.fill.start_color.type == "rgb"
+            else None
+        )
+        rules.append(
+            {
+                "first": str(first or "").strip(),
+                "second": str(second or "").strip(),
+                "op": str(op or "").strip().upper(),
+                "label": str(label or "").strip(),
+                "color": color or "",
+            }
+        )
+
+    return rules
+
+    """
     色分けルールを Excel から読み込む。
 
     - シート2行目以降をルールとして取得
