@@ -600,21 +600,18 @@ import os
 
 
 def run(
-    schedule_file, pref_file="PREF.xlsx", sim_file="SIM Slot List.xlsx"
+    schedule_file, pref_file="PREF.xlsx", sim_file="SIM Slot List 202507.xlsx"
 ) -> tuple[str, str]:
-    # Streamlitからのアップロードに対応（file_uploaderの場合はUploadedFile型）
+    import io
+    import os
 
-    # スケジュールCSV（text）
-    if not isinstance(schedule_file, (str, os.PathLike)):
-        schedule_file = StringIO(schedule_file.read().decode("utf-8"))
-
-    # PREF Excel（binary）
-    if not isinstance(pref_file, (str, os.PathLike)):
-        pref_file = BytesIO(pref_file.read())
-
-    # SIM Slot Excel（binary）
-    if not isinstance(sim_file, (str, os.PathLike)):
-        sim_file = BytesIO(sim_file.read())
+    # Streamlitのアップロードファイルに対応
+    if hasattr(schedule_file, "read"):
+        schedule_file = io.StringIO(schedule_file.read().decode("utf-8"))
+    if hasattr(pref_file, "read"):
+        pref_file = io.BytesIO(pref_file.read())
+    if hasattr(sim_file, "read"):
+        sim_file = io.BytesIO(sim_file.read())
 
     # ...ここから通常通り読み込み処理へ続けてください
     print(f"[DEBUG] schedule_file: {schedule_file}")
