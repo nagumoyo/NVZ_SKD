@@ -10,6 +10,7 @@ from openpyxl.styles import Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 import warnings
 import logging
+import os
 
 # ロガー設定（冒頭に記載）
 logging.basicConfig(
@@ -251,7 +252,7 @@ def slice_blocks(df: pd.DataFrame) -> list:
     return blocks
 
 
-def load_pref_rules(file: str = "PREF.xlsx", sheet_name: str = "色分け設定") -> list:
+def load_pref_rules(file, sheet_name: str = "色分け設定") -> list:
     """
     色分けルールを Excel から読み込む。
 
@@ -260,17 +261,23 @@ def load_pref_rules(file: str = "PREF.xlsx", sheet_name: str = "色分け設定"
     - 6列目のセル背景色を取得し、カラーコードとして保存
 
     Args:
-        file (str): 設定ファイルパス
+        file (str or BytesIO): 設定ファイルパスまたは Streamlit のアップロードファイル
         sheet_name (str): シート名
 
     Returns:
         list of dict: 各ルール辞書を返却
     """
     from openpyxl import load_workbook
+    import os
 
-    wb = load_workbook(file, data_only=True)
+    # BytesIO対応：パスかバイナリかを判定
+    if isinstance(file, (str, bytes, os.PathLike)):
+        wb = load_workbook(file, data_only=True)
+    else:
+        wb = load_workbook(filename=file, data_only=True)
+
     if sheet_name not in wb.sheetnames:
-        print(f"[WARN] シート「{sheet_name}」が{file}に存在しません。")
+        print(f"[WARN] シート「{sheet_name}」が設定ファイルに存在しません。")
         return []
 
     ws = wb[sheet_name]
@@ -625,7 +632,16 @@ def run(
     from datetime import datetime
 
     # Excelブックを開いて1つ目のシート名を取得
-    wb_sim = load_workbook(sim_file, read_only=True, data_only=True)
+    # BEFORE:
+    # wb_sim = load_workbook(sim_file, read_only=True, data_only=True)
+
+    # AFTER: ファイル名でもバッファでも対応できるよう修正
+    from openpyxl import load_workbook
+
+    if isinstance(sim_file, (str, bytes, os.PathLike)):
+        wb_sim = load_workbook(sim_file, read_only=True, data_only=True)
+    else:
+        wb_sim = load_workbook(filename=sim_file, read_only=True, data_only=True)
     first_sheet = wb_sim.sheetnames[0]
 
     # 3行目（index=2）を列名、4行目以降をデータとして読み込む
