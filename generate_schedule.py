@@ -595,9 +595,28 @@ def write_to_excel(
     wb.save(out_xlsx)
 
 
+from io import BytesIO, StringIO
+import os
+
+
 def run(
-    schedule_file, pref_file="PREF.xlsx", sim_file="SIM Slot List 202507.xlsx"
+    schedule_file, pref_file="PREF.xlsx", sim_file="SIM Slot List.xlsx"
 ) -> tuple[str, str]:
+    # Streamlitからのアップロードに対応（file_uploaderの場合はUploadedFile型）
+
+    # スケジュールCSV（text）
+    if not isinstance(schedule_file, (str, os.PathLike)):
+        schedule_file = StringIO(schedule_file.read().decode("utf-8"))
+
+    # PREF Excel（binary）
+    if not isinstance(pref_file, (str, os.PathLike)):
+        pref_file = BytesIO(pref_file.read())
+
+    # SIM Slot Excel（binary）
+    if not isinstance(sim_file, (str, os.PathLike)):
+        sim_file = BytesIO(sim_file.read())
+
+    # ...ここから通常通り読み込み処理へ続けてください
     print(f"[DEBUG] schedule_file: {schedule_file}")
     print(f"[DEBUG] pref_file: {pref_file}")
     print(f"[DEBUG] sim_file: {sim_file}")  # これでファイル名確認可能
