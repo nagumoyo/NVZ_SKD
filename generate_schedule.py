@@ -532,50 +532,53 @@ def write_to_excel(
     wb.save(out_xlsx)
 
 
+import pandas as pd
+import re
+import csv
+import os
+import io
+from datetime import datetime
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
+
+
 def run(
     schedule_file, pref_file="PREF.xlsx", sim_file="SIM Slot List 202507.xlsx"
 ) -> tuple[str, str]:
-    # print(f"[DEBUG] schedule_file: {schedule_file}")
-    # print(f"[DEBUG] pref_file: {pref_file}")
-    # print(f"[DEBUG] sim_file: {sim_file}")  # これでファイル名確認可能
-    """
-    メイン実行関数: スケジュールCSV を読み込み、整形した CSV と Excel を出力する。
-
-    Args:
-        schedule_file (str or UploadedFile): スケジュール CSV のファイルパスまたは Streamlit アップロードオブジェクト
-        pref_file (str): PREF 設定ファイル (PREF.xlsx) のパス
-        sim_file (str): SIM Slot List Excel ファイルのパス
-
-    Returns:
-        tuple[str, str]: 出力された CSV ファイル名と Excel ファイル名
-    """
-    import pandas as pd
-    import re
-    import csv
-    from openpyxl import load_workbook
-    from openpyxl.styles import Alignment, PatternFill, Border, Side
-    from openpyxl.utils import get_column_letter
-    from datetime import datetime  # 追加: 日付文字列生成用
-
-    # ── 1) 入力ファイル読み込み ─────────────────────────────────────────
-    # スケジュール CSV を読み込み、空セルを空文字に置換
-    # ── 1) スケジュールファイル読み込み（堅牢版） ──────────────────────
-    with open(schedule_file, "r", encoding="utf-8") as f:
-        lines = [line.rstrip("\n").split(",") for line in f]
+    # スケジュール CSV 読み込み（str or UploadedFile or BytesIO対応）
+    if isinstance(schedule_file, (str, os.PathLike)):
+        with open(schedule_file, "r", encoding="utf-8") as f:
+            lines = [line.rstrip("\n").split(",") for line in f]
+    else:
+        text = schedule_file.read().decode("utf-8")
+        lines = [line.rstrip("\n").split(",") for line in text.splitlines()]
 
     max_cols = max(len(line) for line in lines)
     lines = [line + [""] * (max_cols - len(line)) for line in lines]
-
-    import pandas as pd
-
     sched = pd.DataFrame(lines).fillna("")
-    # 従来 emp_no.csv の代わりに PREF.xlsx の emp_no シートを使用
-    emp_df = pd.read_excel(
-        pref_file, sheet_name="emp_no", header=None, dtype=str
-    ).fillna("")
-    # 色分けルールと SIM Slot コードリストを取得
-    pref_rules = load_pref_rules(pref_file)
-    simslot_codes = load_simslot_schedule_codes(pref_file)
+
+    # PREF ファイル読み込み（str or BytesIO 対応）
+    pref = (
+        pref_file
+        if isinstance(pref_file, (str, os.PathLike))
+        else io.BytesIO(pref_file.read())
+    )
+    emp_df = pd.read_excel(pref, sheet_name="emp_no", header=None, dtype=str).fillna("")
+
+    # 色分けルールと SIM Slot コード読み込み（補助関数が外にある想定）
+    pref_rules = load_pref_rules(pref)
+    simslot_codes = load_simslot_schedule_codes(pref)
+
+    # SIM Slot ファイル読み込み（str or BytesIO 対応）
+    sim = (
+        sim_file
+        if isinstance(sim_file, (str, os.PathLike))
+        else io.BytesIO(sim_file.read())
+    )
+    wb_sim = load_workbook(sim, read_only=True, data_only=True)
+    first_sheet = wb_sim.sheetnames[0]
+    sim_df = pd.read_excel(sim, sheet_name=first_sheet, header=2, dtype=str).fillna("")
 
     # ── 2) 社員情報マップ作成 ─────────────────────────────────────────
     # emp_df から各種マップを生成: 氏名、2レター、所属、背景設定列

@@ -28,11 +28,18 @@ if st.sidebar.button("実行"):
         )
     else:
         try:
-            # run の呼び出し（emp ファイルは不要になりました）
+            # UploadedFile → BytesIO に変換
+            import io
+
+            sched_io = io.BytesIO(sched_file.getvalue())
+            pref_io = io.BytesIO(pref_file.getvalue())
+            sim_io = io.BytesIO(simslot_file.getvalue())
+
+            # run の呼び出し
             result = run(
-                schedule_file=sched_file,
-                pref_file=pref_file,
-                sim_file=simslot_file,
+                schedule_file=sched_io,
+                pref_file=pref_io,
+                sim_file=sim_io,
             )
             if result is None:
                 st.sidebar.error(
