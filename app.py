@@ -1,5 +1,4 @@
 import streamlit as st
-import io
 from generate_schedule import run
 
 st.title("スケジュール整形ツール")
@@ -29,16 +28,11 @@ if st.sidebar.button("実行"):
         )
     else:
         try:
-            # BytesIO に変換
-            schedule_io = io.BytesIO(sched_file.getbuffer())
-            pref_io = io.BytesIO(pref_file.getbuffer())
-            simslot_io = io.BytesIO(simslot_file.getbuffer())
-
-            # run を呼び出す（バッファを渡す）
+            # run の呼び出し（emp ファイルは不要になりました）
             result = run(
-                schedule_file=schedule_io,
-                pref_file=pref_io,
-                sim_file=simslot_io,
+                schedule_file=sched_file,
+                pref_file=pref_file,
+                sim_file=simslot_file,
             )
             if result is None:
                 st.sidebar.error(
