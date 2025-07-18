@@ -636,9 +636,39 @@ def write_to_excel(
     # オートフィルター設定（A～E 列）
     ws.auto_filter.ref = f"A1:E{current_row - 1}"
 
-    # ② スケジュールCSV読み込み
-    sched = pd.read_csv(schedule_file, header=None, dtype=str).fillna("")
-    first_row = sched.iloc[0].astype(str).tolist()
+    # ── ② 可変列数対応の CSV 読み込み（Streamlit BytesIO／ファイルパス 両対応） ──
+    import csv, io, os, pandas as pd
+
+    # 1) 生テキスト取得
+    if isinstance(schedule_file, (str, os.PathLike)):
+        # パス指定
+        with open(schedule_file, "r", encoding="utf-8", newline="") as fp:
+            raw_text = fp.read()
+    elif hasattr(schedule_file, "read"):
+        # BytesIO/TextIO
+        schedule_file.seek(0)
+        raw = schedule_file.read()
+        raw_text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+    else:
+        raise ValueError(f"Unsupported schedule_file type: {type(schedule_file)}")
+
+    # 2) 行リスト化して reader に渡す
+    lines = raw_text.splitlines()
+    reader = csv.reader(lines)
+    rows = list(reader)
+    if not rows:
+        raise ValueError("Schedule CSV が空か、解析できませんでした。")
+
+    # 3) 最大列数でパディング
+    max_cols = max(len(r) for r in rows)
+    padded = [r + [""] * (max_cols - len(r)) for r in rows]
+
+    # 4) DataFrame 化
+    sched_df = pd.DataFrame(padded, dtype=str).fillna("")
+
+    # 5) ヘッダー行抽出
+    first_row = sched_df.iloc[0].astype(str).tolist()
+    # ─────────────────────────────────────────────────────────────
 
     # ③ 第1行から YYYYMM と FLEET を抽出
     month = ""
