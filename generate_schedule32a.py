@@ -400,7 +400,7 @@ def apply_pref_rules_to_cell(
 # ── 6) Excel 出力: 行ごとの書込み ─────────────────────────────────────────
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
-from openpyxl.styles import Alignment, PatternFill, Border, Side, Font
+from openpyxl.styles import Alignment, PatternFill, Border, Side
 import re
 
 
@@ -491,7 +491,10 @@ def write_onboard_rows(
     return max_onb
 
 
-from openpyxl.styles import Font
+import re
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment
 
 
 def write_to_excel(
@@ -502,139 +505,14 @@ def write_to_excel(
     pref_rules: list,
 ) -> None:
     """
-    全レコードを Excel ファイルに書き出す（Ver31d 版）。
+    スケジュールCSVとレコード情報から既存テンプレートExcelに出力する（Ver32最小版）
 
-    ・先頭に5列追加（Index, Name, AI, AJ, Memo）
-    ・ヘッダー～日付～スケジュール～同乗者行を順次配置
-    ・同乗者情報は社員番号付き dict で保持し、ハイパーリンクを社員番号でマッピング
+    - 第1行のYYYYMMとFLEETを抽出してF1,I1に設定
+    - テンプレート構造を保持し、セル上書きのみ実施
     """
-    wb = Workbook()
+    # ① テンプレートExcelをそのまま読み込み
+    wb = load_workbook(out_xlsx)
     ws = wb.active
-    ws.title = "Schedule"
-
-    # A～E 列を挿入してフィルター用ヘッダーを設定
-    ws.insert_cols(1, amount=5)
-    headers5 = ["Index", "Name", "AI", "AJ", "Memo"]
-    for c, h in enumerate(headers5, start=1):
-        ws.cell(row=1, column=c, value=h)
-    offset = 5
-
-    # 氏名→社員番号マップ（変更なし）
-    name_to_emp = {rec["hdr"][0]: rec["emp_no"] for rec in records}
-
-    # 社員番号→ヘッダー行番号マップ
-    # --- generate_schedule31d.py
-    # +++ generate_schedule31d.py
-    # @@
-    # -    emp_to_row: dict[str, int] = {}
-    # -    r = 2  # データ開始行（ヘッダー行）が2行目なら2
-    # -    for rec in records:
-    # -        emp_no = rec["emp_no"]
-    # -        # 現在の r が「この社員のヘッダー行」の行番号
-    # -        emp_to_row[emp_no] = r
-    # -
-    # -        onb_cnt = sum(len(day) for day in rec.get("onb", []))
-    # -        height = 3 + onb_cnt  # ヘッダー＋日付行＋スケジュール＋同乗者行
-    # -        r += height
-    # ■ 社員番号→ヘッダー行番号マップを作成
-    emp_to_row: dict[str, int] = {}
-    # ヘッダー行は 2 行目から開始（必要に応じて変更してください）
-    current_row = 2
-
-    for rec in records:
-        emp_no = rec["emp_no"]
-
-        # ① 当該レコードの同乗者データから、１日あたりの最大同乗者数を取得
-        max_onboard = max((len(day) for day in rec.get("onb", [])), default=0)
-        # ② ブロック全体の行数を計算（ヘッダー＋日付行＋スケジュール行＋同乗者行）
-        block_height = 3 + max_onboard
-
-        # ③ 現在の行番号を「この社員のヘッダー行番号」として登録
-        emp_to_row[emp_no] = current_row
-
-        # ④ 次ブロックの先頭行へカーソルを進める
-        current_row += block_height
-
-    # データを書き込む基準行
-    current_row = 2
-    for rec in records:
-        # A～D 列（Index, Name, AI, AJ）
-        emp_id = rec["emp_no"]
-        hdr_alpha = rec["hdr"][0]
-        raw_name = rec.get("orig_name", hdr_alpha[:-2])
-        two = hdr_alpha[-2:]
-        full_name = f"{raw_name} {two}"
-        ai_val = rec["hdr"][29] if len(rec["hdr"]) > 29 else ""
-        aj_val = rec["hdr"][30] if len(rec["hdr"]) > 30 else ""
-        onb_cnt = sum(len(day) for day in rec.get("onb", []))
-        block_h = 3 + onb_cnt
-
-        for i in range(block_h):
-            ws.cell(row=current_row + i, column=1, value=f"{emp_id}-{i+1}")
-            ws.cell(row=current_row + i, column=2, value=full_name)
-            ws.cell(row=current_row + i, column=3, value=ai_val)
-            ws.cell(row=current_row + i, column=4, value=aj_val)
-
-        # ヘッダー行（F 列以降）
-        for ci, val in enumerate(rec["hdr"], start=1):
-            cell = ws.cell(row=current_row, column=ci + offset, value=val)
-            cell.border = Border(
-                top=Side(border_style="double"), bottom=Side(border_style="double")
-            )
-            is_phone = bool(re.search(r"\d{2,4}-\d{2,4}-\d{4}", val)) or "電話" in val
-            is_pe = bool(re.fullmatch(r"PE\d{6}", val))
-            cell.alignment = Alignment(
-                horizontal="left",
-                vertical="top",
-                wrap_text=not (is_phone or is_pe),
-                shrink_to_fit=is_pe,
-            )
-
-        # 日付行
-        for ci, dv in enumerate(rec["dr"], start=1):
-            cell = ws.cell(row=current_row + 1, column=ci + offset, value=dv)
-            cell.alignment = Alignment(
-                horizontal="center", vertical="center", wrap_text=True
-            )
-            apply_pref_rules_to_cell(
-                cell,
-                rec["sched"][ci - 1],
-                pref_rules,
-                fallback_color="DDDDDD",
-            )
-
-        # スケジュール行
-        for ci, sv in enumerate(rec["sched"], start=1):
-            cell = ws.cell(row=current_row + 2, column=ci + offset, value=sv)
-            cell.alignment = Alignment(
-                horizontal="left", vertical="top", wrap_text=True
-            )
-
-        # 同乗者情報を dict で組み立て → 書き込み
-        raw_onb = rec.get("onb", [])
-        onboard_data: list[list[dict]] = []
-        for day in raw_onb:
-            day_list: list[dict] = []
-            for display in day:
-                raw = display[1:] if display.startswith(("I", "T")) else display
-                emp_no = name_to_emp.get(raw)
-                day_list.append({"name": display, "emp_no": emp_no})
-            onboard_data.append(day_list)
-
-        onboard_count = write_onboard_rows(
-            ws,
-            current_row + 3,
-            onboard_data,
-            emp_aff_map,
-            rec.get("aff"),
-            emp_to_row,
-            offset,
-        )
-
-        current_row += 3 + onboard_count
-
-    # オートフィルター設定（A～E 列）
-    ws.auto_filter.ref = f"A1:E{current_row - 1}"
 
     # ② スケジュールCSV読み込み
     sched = pd.read_csv(schedule_file, header=None, dtype=str).fillna("")
@@ -656,32 +534,13 @@ def write_to_excel(
         if month and fleet:
             break
 
+    # ④ F1, I1 に書き込み
     ws["F1"] = f"{fleet} 乗員スケジュール"
-    ws["F1"].font = Font(size=20, bold=True)
+    ws["I1"] = month
 
-    ws["J1"] = month
-    ws["J1"].font = Font(size=16)
-    # ── 追加フォーマット設定 ──────────────────────────────────────────
-    # A列を非表示
-    ws.column_dimensions["A"].hidden = True
-
-    # B〜E列を幅3に
-    for col in ("B", "C", "D", "E"):
-        ws.column_dimensions[col].width = 3
-
-    # A〜E列の全セルを白フォントに
-    # ※書き込むデータ数に合わせて max_row は後で上書きしてもOK
-    #    （データ書き込み後に再度ループしても構いません）
-    for col in ("A", "B", "C", "D", "E"):
-        for row in range(1, ws.max_row + 1):
-            ws[f"{col}{row}"].font = Font(color="FFFFFF")
-
-    # シート全体のデフォルト行高を20に（これを先頭で）
-    # ws.sheet_format.defaultRowHeight = 20
-    # そして 1行目だけ改めて高さ指定
-    ws.row_dimensions[1].height = 20
-
+    # ⑤ 保存
     wb.save(out_xlsx)
+    print("[DEBUG] F1/I1 updated")
 
 
 import pandas as pd
@@ -1158,15 +1017,10 @@ def run(
         ),
     )
 
-    from datetime import datetime
-
-    # → 既存の「today = …」「base = …」あたりを丸ごと置き換え
-    # MMDDhhmm（2桁月・2桁日・2桁時・2桁分）形式のタイムスタンプを取得
-    timestamp = datetime.now().strftime("%m%d%H%M")
-
-    # NAGU＋タイムスタンプ の形式で出力
-    out_csv = f"NAGU{timestamp}.csv"
-    out_xlsx = f"NAGU{timestamp}.xlsx"
+    # 日付文字列取得 (Asia/Tokyo)
+    today = datetime.now().strftime("%Y%m%d")
+    out_csv = f"SKDFILE{today}.csv"
+    out_xlsx = f"SKDFILE{today}.xlsx"
 
     # CSV 出力
     with open(out_csv, "w", newline="", encoding="utf-8") as f:
@@ -1178,39 +1032,21 @@ def run(
             w.writerow(["\n".join(x) for x in rec.get("onb", [])])
 
     # Excel 出力
-    write_to_excel(schedule_file, records, emp_aff_map, out_xlsx, pref_rules)
+    write_to_excel(
+        schedule_file, records, emp_aff_map, out_xlsx, pref_rules  # ← これが抜けていた
+    )
     return out_csv, out_xlsx
 
 
-import argparse
-
-
-def main():
-    p = argparse.ArgumentParser(description="クルースケジュール生成ツール")
-    p.add_argument(
-        "--mode",
-        choices=("350", "787"),
-        default="350",
-        help="使用データを選択（350＝A350用、787＝B787用）",
-    )
-    args = p.parse_args()
-
-    if args.mode == "787":
-        schedule_file = "schedule_787.csv"
-        pref_file = "PREF_787_harada.xlsx"
-        sim_file = "SIM Slot List 202507_787.xlsx"
-    else:
-        schedule_file = "schedule350_08.csv"
-        pref_file = "PREF.xlsx"
-        sim_file = "SIM Slot List.xlsx A350 AUG.xlsx"
-
-    csv_path, xlsx_path = run(
-        schedule_file=schedule_file,
-        pref_file=pref_file,
-        sim_file=sim_file,
-    )
-    print(f"Generated: {csv_path}, {xlsx_path}")
-
-
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    p = argparse.ArgumentParser()
+    p.add_argument("--schedule", default="schedule.csv")
+    p.add_argument("--pref", default="PREF.xlsx")
+    p.add_argument(
+        "--sim", default="SIM Slot List 202507.xlsx"
+    )  # SIM Slot ファイルをオプションとして追加
+
+    a = p.parse_args()
+    run(a.schedule, a.pref, a.sim)  # ← sim を明示的に渡す

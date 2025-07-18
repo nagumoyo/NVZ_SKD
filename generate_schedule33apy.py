@@ -400,7 +400,7 @@ def apply_pref_rules_to_cell(
 # ── 6) Excel 出力: 行ごとの書込み ─────────────────────────────────────────
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
-from openpyxl.styles import Alignment, PatternFill, Border, Side, Font
+from openpyxl.styles import Alignment, PatternFill, Border, Side
 import re
 
 
@@ -491,11 +491,7 @@ def write_onboard_rows(
     return max_onb
 
 
-from openpyxl.styles import Font
-
-
 def write_to_excel(
-    schedule_file: str,
     records: list,
     emp_aff_map: dict,
     out_xlsx: str,
@@ -635,52 +631,6 @@ def write_to_excel(
 
     # オートフィルター設定（A～E 列）
     ws.auto_filter.ref = f"A1:E{current_row - 1}"
-
-    # ② スケジュールCSV読み込み
-    sched = pd.read_csv(schedule_file, header=None, dtype=str).fillna("")
-    first_row = sched.iloc[0].astype(str).tolist()
-
-    # ③ 第1行から YYYYMM と FLEET を抽出
-    month = ""
-    fleet = ""
-    for cell in first_row:
-        c = cell.strip().lstrip("\ufeff")
-        if not month:
-            m = re.search(r"(\d{6})", c)
-            if m:
-                month = m.group(1)
-        if not fleet:
-            m2 = re.search(r"FLEET[:：]\[(.+?)\]", c, flags=re.IGNORECASE)
-            if m2:
-                fleet = m2.group(1)
-        if month and fleet:
-            break
-
-    ws["F1"] = f"{fleet} 乗員スケジュール"
-    ws["F1"].font = Font(size=20, bold=True)
-
-    ws["J1"] = month
-    ws["J1"].font = Font(size=16)
-    # ── 追加フォーマット設定 ──────────────────────────────────────────
-    # A列を非表示
-    ws.column_dimensions["A"].hidden = True
-
-    # B〜E列を幅3に
-    for col in ("B", "C", "D", "E"):
-        ws.column_dimensions[col].width = 3
-
-    # A〜E列の全セルを白フォントに
-    # ※書き込むデータ数に合わせて max_row は後で上書きしてもOK
-    #    （データ書き込み後に再度ループしても構いません）
-    for col in ("A", "B", "C", "D", "E"):
-        for row in range(1, ws.max_row + 1):
-            ws[f"{col}{row}"].font = Font(color="FFFFFF")
-
-    # シート全体のデフォルト行高を20に（これを先頭で）
-    # ws.sheet_format.defaultRowHeight = 20
-    # そして 1行目だけ改めて高さ指定
-    ws.row_dimensions[1].height = 20
-
     wb.save(out_xlsx)
 
 
@@ -1158,15 +1108,10 @@ def run(
         ),
     )
 
-    from datetime import datetime
-
-    # → 既存の「today = …」「base = …」あたりを丸ごと置き換え
-    # MMDDhhmm（2桁月・2桁日・2桁時・2桁分）形式のタイムスタンプを取得
-    timestamp = datetime.now().strftime("%m%d%H%M")
-
-    # NAGU＋タイムスタンプ の形式で出力
-    out_csv = f"NAGU{timestamp}.csv"
-    out_xlsx = f"NAGU{timestamp}.xlsx"
+    # 日付文字列取得 (Asia/Tokyo)
+    today = datetime.now().strftime("%Y%m%d")
+    out_csv = f"SKDFILE{today}.csv"
+    out_xlsx = f"SKDFILE{today}.xlsx"
 
     # CSV 出力
     with open(out_csv, "w", newline="", encoding="utf-8") as f:
@@ -1178,7 +1123,7 @@ def run(
             w.writerow(["\n".join(x) for x in rec.get("onb", [])])
 
     # Excel 出力
-    write_to_excel(schedule_file, records, emp_aff_map, out_xlsx, pref_rules)
+    write_to_excel(records, emp_aff_map, out_xlsx, pref_rules)
     return out_csv, out_xlsx
 
 
@@ -1197,12 +1142,12 @@ def main():
 
     if args.mode == "787":
         schedule_file = "schedule_787.csv"
-        pref_file = "PREF_787_harada.xlsx"
+        pref_file = "PREF_787.xlsx"
         sim_file = "SIM Slot List 202507_787.xlsx"
     else:
-        schedule_file = "schedule350_08.csv"
+        schedule_file = "schedule.csv"
         pref_file = "PREF.xlsx"
-        sim_file = "SIM Slot List.xlsx A350 AUG.xlsx"
+        sim_file = "SIM Slot List 202507.xlsx"
 
     csv_path, xlsx_path = run(
         schedule_file=schedule_file,
