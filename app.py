@@ -25,10 +25,8 @@ st.markdown(
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     logo = Image.open("image/nagu_logo.png")  # 実際のロゴファイルパスに書き換え
-    st.image(logo, use_column_width=True)
+    st.image(logo, use_container_width=True)
 
-# ③ 既存のタイトル
-st.title("✈ NAGU 乗務割整形支援ツール")
 
 # --- ファイルアップロード UI ---
 st.sidebar.header("入力ファイル")
