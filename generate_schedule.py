@@ -700,6 +700,21 @@ def run(
     pref_file,
     sim_file,
 ) -> tuple[str, str]:
+    # ── ファイルポインタを先頭に戻す ───────────────────────────
+    for f in (schedule_file, pref_file, sim_file):
+        if hasattr(f, "seek"):
+            f.seek(0)
+    # ────────────────────────────────────────────────────
+
+    # ── CSV 読み込み：パス or ストリームで分岐 ─────────────────
+    if isinstance(schedule_file, (str, os.PathLike)):
+        sched_fp = schedule_file
+    else:
+        sched_fp = io.TextIOWrapper(schedule_file, encoding="utf-8")
+    sched_df = pd.read_csv(sched_fp, header=None, dtype=str).fillna("")
+    if not isinstance(schedule_file, (str, os.PathLike)):
+        sched_fp.detach()
+    # ────────────────────────────────────────────────────
 
     # スケジュール CSV 読み込み（str or UploadedFile or BytesIO対応）
     if isinstance(schedule_file, (str, os.PathLike)):
