@@ -698,6 +698,13 @@ from openpyxl.utils import get_column_letter
 def run(
     schedule_file, pref_file="PREF.xlsx", sim_file="SIM Slot List 202507.xlsx"
 ) -> tuple[str, str]:
+
+    # ── ファイルオブジェクトが先頭から読まれるようにリセット ──
+    for f in (schedule_file, pref_file, sim_file):
+        if hasattr(f, "seek"):
+            f.seek(0)
+    # ────────────────────────────────────────────────────────
+
     # スケジュール CSV 読み込み（str or UploadedFile or BytesIO対応）
     if isinstance(schedule_file, (str, os.PathLike)):
         with open(schedule_file, "r", encoding="utf-8") as f:
