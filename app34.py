@@ -1,34 +1,7 @@
 import streamlit as st
 from generate_schedule import run
-from PIL import Image  # ロゴ表示用
 
-# ① ページ設定＋背景グラデ
-st.set_page_config(
-    page_title="✈ NAGU 乗務割整形支援ツール",
-    page_icon="✈️",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-
-st.markdown(
-    """
-    <style>
-    .stApp {
-      background: linear-gradient(135deg, #e0f7fa 0%, #e1bee7 100%);
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-# ② ロゴをセンタリング表示
-col1, col2, col3 = st.columns([1, 2, 1])
-with col2:
-    logo = Image.open("path/to/nagu_logo.png")  # 実際のロゴファイルパスに書き換え
-    st.image(logo, use_column_width=True)
-
-# ③ 既存のタイトル
-st.title("✈ NAGU 乗務割整形支援ツール")
+st.title("スケジュール整形ツール")
 
 # --- ファイルアップロード UI ---
 st.sidebar.header("入力ファイル")
