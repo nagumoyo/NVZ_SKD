@@ -735,27 +735,37 @@ def run(
             f.seek(0)
     # ────────────────────────────────────────────────────
 
-    # ── CSV 読み込み：パス or ストリームで分岐 ─────────────────
-    if isinstance(schedule_file, (str, os.PathLike)):
-        sched_fp = schedule_file
-    else:
-        sched_fp = io.TextIOWrapper(schedule_file, encoding="utf-8")
-    sched_df = pd.read_csv(sched_fp, header=None, dtype=str).fillna("")
-    if not isinstance(schedule_file, (str, os.PathLike)):
-        sched_fp.detach()
-    # ────────────────────────────────────────────────────
+    # スケジュール CSV 読み込み（可変列数＆BytesIO対応）
+    import csv, io, os
 
-    # スケジュール CSV 読み込み（str or UploadedFile or BytesIO対応）
+    # ── 生テキストを取得 ───────────────────────────────────
     if isinstance(schedule_file, (str, os.PathLike)):
-        with open(schedule_file, "r", encoding="utf-8") as f:
-            lines = [line.rstrip("\n").split(",") for line in f]
+        with open(schedule_file, "r", encoding="utf-8", newline="") as fp:
+            raw_text = fp.read()
+    elif hasattr(schedule_file, "read"):
+        schedule_file.seek(0)
+        raw = schedule_file.read()
+        raw_text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
     else:
-        text = schedule_file.read().decode("utf-8")
-        lines = [line.rstrip("\n").split(",") for line in text.splitlines()]
+        raise ValueError(f"Unsupported schedule_file type: {type(schedule_file)}")
+    # ─────────────────────────────────────────────────────
 
-    max_cols = max(len(line) for line in lines)
-    lines = [line + [""] * (max_cols - len(line)) for line in lines]
-    sched = pd.DataFrame(lines).fillna("")
+    # ── 行単位に分割して reader へ ────────────────────────
+    lines = raw_text.splitlines()
+    reader = csv.reader(lines)
+    rows = list(reader)
+    if not rows:
+        raise ValueError("Schedule CSV が空か、解析できませんでした。")
+    # ─────────────────────────────────────────────────────
+
+    # ── 最大列数でパディング ───────────────────────────────
+    max_cols = max(len(r) for r in rows)
+    padded = [r + [""] * (max_cols - len(r)) for r in rows]
+    # ─────────────────────────────────────────────────────
+
+    # ── pandas DataFrame 化 ─────────────────────────────────
+    sched = pd.DataFrame(padded, dtype=str).fillna("")
+    # ─────────────────────────────────────────────────────
 
     # PREF ファイル読み込み（str or BytesIO 対応）
     pref = (
