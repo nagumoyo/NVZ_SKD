@@ -24,7 +24,7 @@ st.markdown(
 # ② ロゴをセンタリング表示
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
-    logo = Image.open("path/to/nagu_logo.png")  # 実際のロゴファイルパスに書き換え
+    logo = Image.open("image/nagu_logo.png")  # 実際のロゴファイルパスに書き換え
     st.image(logo, use_column_width=True)
 
 # ③ 既存のタイトル
