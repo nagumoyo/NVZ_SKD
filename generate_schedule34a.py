@@ -35,20 +35,24 @@ import io as _io
 
 
 def load_sim_slot_excel(file):
+    """
+    SIM Slot Excel ファイルを pandas.DataFrame として読み込むユーティリティ関数。
 
-    # ① file が None または空文字列なら即空 DataFrame
-    if file is None or (isinstance(file, str) and file == ""):
-        return _pd.DataFrame()
-
+    - file が文字列の場合はパスの存在をチェック
+    - 存在しない or 読み込み失敗時は空の DataFrame を返す
+    """
     try:
         if isinstance(file, str):
+            # ローカルパス指定なら存在を確認
             if not os.path.exists(file):
                 print(
                     f"[INFO] SIM Slot List ファイルが見つかりません ({file})。処理をスキップします。"
                 )
                 return _pd.DataFrame()
+            # ヘッダーは3行目 (header=2)
             df = _pd.read_excel(file, header=2, dtype=str)
         else:
+            # Streamlit UploadedFile 対応
             raw = file.read()
             df = _pd.read_excel(_io.BytesIO(raw), header=2, dtype=str)
 
@@ -1233,8 +1237,8 @@ def main():
     else:
         schedule_file = "schedule350_08.csv"
         pref_file = "PREF.xlsx"
-        sim_file = "SIM Slot List.xlsx A350 AUG.xlsx"
-        # sim_file = ""
+        # sim_file = "SIM Slot List.xlsx A350 AUG.xlsx"
+        sim_file = ""
 
     csv_path, xlsx_path = run(
         schedule_file=schedule_file,
