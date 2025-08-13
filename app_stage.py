@@ -14,18 +14,17 @@ st.set_page_config(
 # --- サイドバー（STAGEバッジ＋差分比較トグル） ---
 st.sidebar.markdown("### 🧪 STAGE（テスト環境）")
 st.sidebar.subheader("前回Excel比較（任意）")
+
+# 比較ON/OFFのトグル
 use_diff = st.sidebar.checkbox("前回Excelと比較して変更セルをハイライト", value=False)
+
+# 比較ONのときだけアップローダを出す（← ここが1か所だけ）
 prev_up = None
 if use_diff:
     prev_up = st.sidebar.file_uploader(
-        "前回の出力Excel (.xlsx)", type=["xlsx"], key="prev_xlsx"
-    )
-
-
-with st.sidebar:
-    st.subheader("前回Excel比較（任意）")
-    prev_up = st.file_uploader(
-        "前回の出力Excel (.xlsx)", type=["xlsx"], key="prev_xlsx"
+        "前回の出力Excel (.xlsx)",
+        type=["xlsx"],
+        key="prev_xlsx",  # ← このkeyはアプリ全体で一意
     )
 
 
