@@ -8,6 +8,79 @@ import xlsxwriter
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
+
+# === 前回Excel差分ハイライト (emp_no × day_index 比較) ==============
+import re as _re_for_prevmap
+from openpyxl import load_workbook as _load_wb_for_prevmap
+from openpyxl.styles import PatternFill as _PatternFill_for_prevmap
+
+DIFF_FILL = _PatternFill_for_prevmap(
+    fill_type="solid", start_color="FFF2CC", end_color="FFF2CC"
+)
+
+
+def build_prev_map_from_excel(prev_xlsx_path):
+    """
+    前回出力Excelを (emp_no:str, day_index:int) -> value:str に変換。
+    day_index はその人の「日付行で左から数えた列番号（1始まり）」。
+    日付セルの表記（1/01/2025-08-01 等）の違いには影響されない。
+    """
+    wb = _load_wb_for_prevmap(prev_xlsx_path, data_only=True)
+    ws = wb.active
+    max_r, max_c = ws.max_row, ws.max_column
+
+    def _is_dateish(v):
+        if v is None:
+            return False
+        s = str(v).strip()
+        return bool(
+            _re_for_prevmap.match(r"^\d{1,2}$", s)
+            or _re_for_prevmap.match(r"^\d{4}-\d{2}-\d{2}$", s)
+        )
+
+    emp_pat = _re_for_prevmap.compile(r"^(?:000)?(\d{5})$")
+
+    # 1) 日付が複数並ぶ行を候補に
+    date_rows = []
+    for r in range(1, max_r + 1):
+        vals = [ws.cell(r, c).value for c in range(1, max_c + 1)]
+        if sum(1 for v in vals if _is_dateish(v)) >= 5:
+            date_rows.append(r)
+
+    # 2) 各日付行の上～3行で職番を探す（000##### or 5桁）
+    header_emp = {}  # row_of_dates -> emp_no(5桁)
+    for r in date_rows:
+        found = None
+        for rr in range(max(1, r - 3), r):
+            vals = [
+                str(ws.cell(rr, c).value or "").strip() for c in range(1, max_c + 1)
+            ]
+            for v in vals:
+                m = emp_pat.match(v)
+                if m:
+                    found = m.group(1)
+                    break
+            if found:
+                break
+        if found:
+            header_emp[r] = found
+
+    # 3) (emp_no, day_index) を構築（日付行の次行がスケジュール行）
+    prev_map = {}
+    for r in date_rows:
+        emp_no = header_emp.get(r)
+        if not emp_no:
+            continue
+        sched_row = r + 1
+        date_cols = [c for c in range(1, max_c + 1) if _is_dateish(ws.cell(r, c).value)]
+        for idx, c in enumerate(date_cols, start=1):  # idx: day_index
+            val = str(ws.cell(sched_row, c).value or "").strip()
+            prev_map[(emp_no, idx)] = val
+    return prev_map
+
+
+# ====================================================================
+
 import warnings
 import logging
 
@@ -483,90 +556,6 @@ def write_onboard_rows(
 
 from openpyxl.styles import Font
 
-# === 前回Excel差分ハイライト 用ヘルパー（「日番index」で比較） ===============
-from typing import Optional, Dict, Tuple
-from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
-import re
-
-# 変更セルの塗り色（淡い黄色）
-DIFF_FILL = PatternFill(fill_type="solid", start_color="FFF2CC", end_color="FFF2CC")
-
-
-def build_prev_map_from_excel(prev_xlsx_path: str) -> Dict[Tuple[str, int], str]:
-    """
-    前回出力Excelを (emp_no, day_index)->値 の辞書に変換する。
-    day_index は、その人の“日付行”で左から数えた日番（1始まり）。
-    日付セルの表記が「1」「01」「2025-08-01」など何でもOK。列位置で判断する。
-    """
-    wb = load_workbook(prev_xlsx_path, data_only=True)
-    ws = wb.active
-    max_r, max_c = ws.max_row, ws.max_column
-
-    emp_pat = re.compile(r"^(?:000)?(\d{5})$")
-
-    def is_dateish(v) -> bool:
-        if v is None:
-            return False
-        s = str(v).strip()
-        # 1..31, 01..31, or 2025-08-13 のようなISOっぽい表記を許容
-        if re.match(r"^\d{1,2}$", s):
-            return True
-        if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
-            return True
-        return False
-
-    # 1) 日付が複数並ぶ行を候補に
-    date_rows = []
-    for r in range(1, max_r + 1):
-        vals = [ws.cell(r, c).value for c in range(1, max_c + 1)]
-        cnt = sum(1 for v in vals if is_dateish(v))
-        if cnt >= 5:
-            date_rows.append(r)
-
-    # 2) 各日付行の“上3行以内”から職番を見つける（000##### or 5桁）
-    header_emp: Dict[int, str] = {}
-    for r in date_rows:
-        found = None
-        for rr in range(max(1, r - 3), r):
-            vals = [
-                str(ws.cell(rr, c).value or "").strip() for c in range(1, max_c + 1)
-            ]
-            for v in vals:
-                m = emp_pat.match(v)
-                if m:
-                    found = m.group(1)  # 5桁化
-                    break
-            if found:
-                break
-        if found:
-            header_emp[r] = found
-
-    # 3) (emp_no, day_index) -> 値 を構築（日付行の次行がスケジュール行）
-    prev_map: Dict[Tuple[str, int], str] = {}
-    for r in date_rows:
-        emp_no = header_emp.get(r)
-        if not emp_no:
-            continue
-        sched_row = r + 1
-        if sched_row > max_r:
-            continue
-
-        # 日付らしいセルの列だけを“左から順番”に採用
-        date_cols = []
-        for c in range(1, max_c + 1):
-            if is_dateish(ws.cell(r, c).value):
-                date_cols.append(c)
-
-        for idx, c in enumerate(date_cols, start=1):  # idx が day_index
-            val = str(ws.cell(sched_row, c).value or "").strip()
-            prev_map[(emp_no, idx)] = val
-
-    return prev_map
-
-
-# ==================================================================
-
 
 def write_to_excel(
     schedule_file: str,
@@ -574,7 +563,7 @@ def write_to_excel(
     emp_aff_map: dict,
     out_xlsx: str,
     pref_rules: list,
-    prev_map: Optional[dict[tuple[str, int], str]] = None,  # ← 追加
+    prev_map=None,
 ) -> None:
     """
     全レコードを Excel ファイルに書き出す（Ver31d 版）。
@@ -684,11 +673,13 @@ def write_to_excel(
             cell.alignment = Alignment(
                 horizontal="left", vertical="top", wrap_text=True
             )
-    # 前回との差分ならハイライト（新規/変更/削除すべて）
-    if prev_map is not None:
-        if str(sv or "") != str(prev_map.get((str(emp_id), ci), None) or ""):
-            cell.fill = DIFF_FILL
 
+            # 差分ハイライト（新規/変更/削除すべて）
+            if prev_map is not None:
+                emp_id_str = str(emp_id)
+                old = str(prev_map.get((emp_id_str, ci), ""))
+                if str(sv or "") != old:
+                    cell.fill = DIFF_FILL
         # 同乗者情報を dict で組み立て → 書き込み
         raw_onb = rec.get("onb", [])
         onboard_data: list[list[dict]] = []
@@ -807,9 +798,8 @@ def run(
     schedule_file,
     pref_file,
     sim_file,
-    prev_excel: object | None = None,  # ← 追加
+    prev_excel=None,
 ) -> tuple[str, str]:
-
     # ── ファイルポインタを先頭に戻す ───────────────────────────
     for f in (schedule_file, pref_file, sim_file):
         if hasattr(f, "seek"):
@@ -1299,31 +1289,35 @@ def run(
             w.writerow(rec["sched"])
             w.writerow(["\n".join(x) for x in rec.get("onb", [])])
 
+    # Excel 出力前に、前回Excelが渡されていれば比較マップを構築
+    prev_map = None
+    if prev_excel:
+        import io as _io_prev, tempfile as _tmp_prev
 
-# （追加）前回Excel → (emp_no, day_index) マップ
-prev_map = None
-if prev_excel:
-    import io, tempfile
+        if isinstance(prev_excel, (bytes, bytearray, _io_prev.BytesIO)):
+            data = (
+                prev_excel
+                if isinstance(prev_excel, (bytes, bytearray))
+                else prev_excel.getvalue()
+            )
+            tmp = _tmp_prev.NamedTemporaryFile(delete=False, suffix=".xlsx")
+            tmp.write(data)
+            tmp.flush()
+            tmp.close()
+            prev_path = tmp.name
+        else:
+            prev_path = str(prev_excel)
+        try:
+            prev_map = build_prev_map_from_excel(prev_path)
+        except Exception:
+            prev_map = None
 
-    if isinstance(prev_excel, (bytes, io.BytesIO)):
-        data = prev_excel if isinstance(prev_excel, bytes) else prev_excel.getvalue()
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
-        tmp.write(data)
-        tmp.flush()
-        tmp.close()
-        prev_path = tmp.name
-    else:
-        prev_path = str(prev_excel)
-    try:
-        prev_map = build_prev_map_from_excel(prev_path)
-    except Exception:
-        prev_map = None  # 読めなければ比較なしで続行
+    # Excel 出力
+    write_to_excel(
+        schedule_file, records, emp_aff_map, out_xlsx, pref_rules, prev_map=prev_map
+    )
 
-# Excel 出力（prev_mapを渡す）
-write_to_excel(
-    schedule_file, records, emp_aff_map, out_xlsx, pref_rules, prev_map=prev_map
-)
-return out_csv, out_xlsx
+    return out_csv, out_xlsx
 
 
 import argparse
