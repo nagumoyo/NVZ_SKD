@@ -2,7 +2,6 @@ import streamlit as st
 from generate_schedule import run
 from PIL import Image  # ロゴ表示用
 
-st.sidebar.markdown("### 🧪 STAGE（テスト環境）")  # ← これだけでOK（見間違い防止）
 
 # ① ページ設定＋背景グラデ
 st.set_page_config(
@@ -11,6 +10,24 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+# --- サイドバー（STAGEバッジ＋差分比較トグル） ---
+st.sidebar.markdown("### 🧪 STAGE（テスト環境）")
+st.sidebar.subheader("前回Excel比較（任意）")
+use_diff = st.sidebar.checkbox("前回Excelと比較して変更セルをハイライト", value=False)
+prev_up = None
+if use_diff:
+    prev_up = st.sidebar.file_uploader(
+        "前回の出力Excel (.xlsx)", type=["xlsx"], key="prev_xlsx"
+    )
+
+
+with st.sidebar:
+    st.subheader("前回Excel比較（任意）")
+    prev_up = st.file_uploader(
+        "前回の出力Excel (.xlsx)", type=["xlsx"], key="prev_xlsx"
+    )
+
 
 st.markdown(
     """
@@ -46,28 +63,28 @@ simslot_file = st.sidebar.file_uploader(
 )
 
 # --- 実行ボタン ---
+# --- 実行ボタン ---
 if st.sidebar.button("実行"):
-    # 必要ファイルのチェック
     if not sched_file or not pref_file:
         st.sidebar.error("スケジュールCSVと設定ファイル(PREF.xlsx)は必須です。")
     else:
         try:
             import io
 
-            # UploadedFile → BytesIO に変換
             sched_io = io.BytesIO(sched_file.getvalue())
             pref_io = io.BytesIO(pref_file.getvalue())
-            # SIM Slot は任意
-            if simslot_file:
-                sim_io = io.BytesIO(simslot_file.getvalue())
-            else:
-                sim_io = ""
+            sim_io = io.BytesIO(simslot_file.getvalue()) if simslot_file else ""
 
-            # run の呼び出し
+            # ✅ 比較ONのときだけ前回Excelを渡す
+            prev_arg = (
+                prev_up.getvalue() if (use_diff and prev_up is not None) else None
+            )
+
             result = run(
                 schedule_file=sched_io,
                 pref_file=pref_io,
                 sim_file=sim_io,
+                prev_excel=prev_arg,  # ← ここが肝！
             )
 
             if result is None:
