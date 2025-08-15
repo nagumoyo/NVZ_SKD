@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# === generate_schedule35d.py ===
+# === generate_schedule35d1.py ===
 
 import pandas as pd
 import re
@@ -8,6 +8,18 @@ import xlsxwriter
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
+
+
+# === E列（養成期フィルター）用ヘルパー ===============================
+def _write_phase_filter(ws, row_idx, phase_num):
+    """E列にフィルター値を書き込む。ヘッダー(1行目)のラベルも一度だけ設定。"""
+    if ws.cell(row=1, column=5).value not in ("養成期",):
+        ws.cell(row=1, column=5, value="養成期")
+    ws.cell(row=row_idx, column=5, value=phase_num if phase_num is not None else None)
+
+
+# =====================================================================
+
 
 # === フィルター用：M列（hdr[12]）から養成期の数値を拾う ==================
 # 0-based index: A=0, ..., L=11, M=12
@@ -749,6 +761,11 @@ def write_to_excel(
                 shrink_to_fit=is_pe,
             )
 
+        # ここから追記（ヘッダー行のE列）
+        m_raw = str(rec["hdr"][7] if len(rec["hdr"]) > 7 else "").strip()  # F=0 … M=7
+        phase_num = int(m_raw) if (m_raw.isdigit() and 2 <= len(m_raw) <= 3) else None
+        _write_phase_filter(ws, current_row, phase_num)
+
         # ── ここから追記：E列＝養成期フィルター（数値のみ） ─────────────────
         # ラベルは1回だけ
         if ws.cell(row=1, column=5).value not in ("養成期",):
@@ -777,7 +794,8 @@ def write_to_excel(
                 pref_rules,
                 fallback_color="DDDDDD",
             )
-
+        # ── ここから追記：日付行もE列に養成期を入れる（ブロック表示のため）
+        _write_phase_filter(ws, current_row + 1, phase_num)
         # スケジュール行
         for ci, sv in enumerate(rec["sched"], start=1):
             cell = ws.cell(row=current_row + 2, column=ci + offset, value=sv)
@@ -791,6 +809,10 @@ def write_to_excel(
                 old = str(prev_map.get((emp_id_str, ci), ""))
                 if str(sv or "") != old:
                     cell.fill = diff_fill
+
+        # ここから追記（スケジュール行のE列）
+        _write_phase_filter(ws, current_row + 2, phase_num)
+
         # 同乗者情報を dict で組み立て → 書き込み
         raw_onb = rec.get("onb", [])
         onboard_data: list[list[dict]] = []
