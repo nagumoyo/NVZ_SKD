@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# === generate_schedule35d.py ===
+# === generate_schedule35b.py ===
 
 import pandas as pd
 import re
@@ -8,25 +8,6 @@ import xlsxwriter
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
-
-# === フィルター用：M列（hdr[12]）から養成期の数値を拾う ==================
-# 0-based index: A=0, ..., L=11, M=12
-HDR_IDX_M = 12
-
-
-def _phase_from_hdr_m(hdr):
-    """
-    ヘッダー配列 hdr の M 列（hdr[12]）を見て、
-    2～3桁の純粋な数字なら int で返す。そうでなければ None。
-    """
-    if not isinstance(hdr, (list, tuple)) or len(hdr) <= HDR_IDX_M:
-        return None
-    s = str(hdr[HDR_IDX_M] or "").strip()
-    return int(s) if s.isdigit() and 2 <= len(s) <= 3 else None
-
-
-# ===================================================================
-
 
 # === 前回Excel差分ハイライト (emp_no × day_index 比較) ==============
 import re as _re_for_prevmap
@@ -38,75 +19,6 @@ DIFF_FILL = _PatternFill_for_prevmap(
 )
 
 
-# --- 差分ハイライト色（PREF.xlsx から可変） ------------------------------
-import pandas as _pd_for_diffcolor
-
-_DIFFF_DEFAULT_HEX = "FFF2CC"
-
-
-def _hex6(s):
-    if not s:
-        return None
-    s = str(s).strip()
-    if s.startswith("#"):
-        s = s[1:]
-    return s.upper() if _re_for_prevmap.fullmatch(r"[0-9a-fA-F]{6}", s) else None
-
-
-def load_diff_color(pref_source):
-    """
-    『色分け設定』シートから差分色を取得する。
-    期待カラム: ENABLE / FIRST ROW / AND/OR / SECOND ROW / LABEL / COLOR
-    優先: FIRST ROW == "__DIFF__" の行、無ければ LABEL に '差分' / '差分ハイライト' / 'diff'
-    該当なしなら None（既定色を使う）。
-    """
-    try:
-        df = _pd_for_diffcolor.read_excel(
-            pref_source, sheet_name="色分け設定", dtype=str
-        ).fillna("")
-    except Exception:
-        return None
-    # 推定列名
-    cols = {c.strip().lower(): c for c in df.columns}
-    col_first = (
-        cols.get("first row")
-        or cols.get("first_row")
-        or cols.get("first")
-        or list(df.columns)[0]
-    )
-    col_label = cols.get("label") or cols.get("名称") or cols.get("説明")
-    col_color = cols.get("color") or cols.get("色") or cols.get("カラー")
-    col_enable = cols.get("enable") or cols.get("有効") or cols.get("enabled")
-
-    def _enabled(r):
-        if not col_enable:
-            return True
-        v = str(r.get(col_enable, "")).strip().lower()
-        return v in ("yes", "true", "1", "y", "on", "")
-
-    # 優先1: FIRST ROW == "__DIFF__"
-    for _, r in df.iterrows():
-        if not _enabled(r):
-            continue
-        fr = str(r.get(col_first, "")).strip()
-        if fr == "__DIFF__":
-            hx = _hex6(r.get(col_color, ""))
-            if hx:
-                return hx
-    # 優先2: LABEL
-    if col_label:
-        for _, r in df.iterrows():
-            if not _enabled(r):
-                continue
-            lb = str(r.get(col_label, "")).strip().lower()
-            if any(k in lb for k in ("差分", "差分ﾊｲﾗｲﾄ", "diff")):
-                hx = _hex6(r.get(col_color, ""))
-                if hx:
-                    return hx
-    return None
-
-
-# -------------------------------------------------------------------
 def build_prev_map_from_excel(prev_xlsx_path):
     """
     前回出力Excelを (emp_no:str, day_index:int) -> value:str に変換。
@@ -652,7 +564,6 @@ def write_to_excel(
     out_xlsx: str,
     pref_rules: list,
     prev_map=None,
-    diff_fill=None,
 ) -> None:
     """
     全レコードを Excel ファイルに書き出す（Ver31d 版）。
@@ -661,12 +572,6 @@ def write_to_excel(
     ・ヘッダー～日付～スケジュール～同乗者行を順次配置
     ・同乗者情報は社員番号付き dict で保持し、ハイパーリンクを社員番号でマッピング
     """
-    # 差分色のデフォルト設定（PREF未設定時は薄黄）
-    if diff_fill is None:
-        diff_fill = _PatternFill_for_prevmap(
-            fill_type="solid", start_color="FFF2CC", end_color="FFF2CC"
-        )
-
     wb = Workbook()
     ws = wb.active
     ws.title = "Schedule"
@@ -749,22 +654,6 @@ def write_to_excel(
                 shrink_to_fit=is_pe,
             )
 
-        # ── ここから追記：E列＝養成期フィルター（数値のみ） ─────────────────
-        # ラベルは1回だけ
-        if ws.cell(row=1, column=5).value not in ("養成期",):
-            ws.cell(row=1, column=5, value="養成期")
-
-        # ✅ M列は rec["hdr"][7]（0-based）です。F=0, G=1, ..., M=7
-        m_raw = str(rec["hdr"][7] if len(rec["hdr"]) > 7 else "").strip()
-        phase_num = int(m_raw) if (m_raw.isdigit() and 2 <= len(m_raw) <= 3) else None
-
-        ws.cell(
-            row=current_row,
-            column=5,
-            value=phase_num if phase_num is not None else None,
-        )
-        # ────────────────────────────────────────────────────────────────
-
         # 日付行
         for ci, dv in enumerate(rec["dr"], start=1):
             cell = ws.cell(row=current_row + 1, column=ci + offset, value=dv)
@@ -790,7 +679,7 @@ def write_to_excel(
                 emp_id_str = str(emp_id)
                 old = str(prev_map.get((emp_id_str, ci), ""))
                 if str(sv or "") != old:
-                    cell.fill = diff_fill
+                    cell.fill = DIFF_FILL
         # 同乗者情報を dict で組み立て → 書き込み
         raw_onb = rec.get("onb", [])
         onboard_data: list[list[dict]] = []
@@ -814,8 +703,8 @@ def write_to_excel(
 
         current_row += 3 + onboard_count
 
-    # フィルター範囲を A～E に（E=養成期フィルター列）
-    ws.auto_filter.ref = f"A1:E{ws.max_row}"
+    # オートフィルター設定（A～E 列）
+    ws.auto_filter.ref = f"A1:E{current_row - 1}"
 
     # ② 可変列数対応の CSV 読み込み（Streamlit BytesIO／ファイルパス 両対応）
     import csv, io, os
@@ -891,30 +780,7 @@ def write_to_excel(
     # そして 1行目だけ改めて高さ指定
     ws.row_dimensions[1].height = 20
 
-    # --- Legend（凡例）シート作成（差分色のみ） --------------------------
-    try:
-        _wb = ws.parent  # Workbook
-        # 既存Legendがあれば作り直し
-        if "Legend" in [s.title for s in _wb.worksheets]:
-            _wb.remove(_wb["Legend"])
-        ws_legend = _wb.create_sheet("Legend")
-        ws_legend.append(["説明", "色見本"])
-        demo = ws_legend.cell(row=2, column=2, value="差分セル")
-        demo.fill = diff_fill
-        ws_legend.cell(
-            row=2, column=1, value="前回Excelと今回の値が異なるセルをハイライト"
-        )
-        ws_legend.freeze_panes = "A2"
-        try:
-            ws_legend.column_dimensions["A"].width = 48
-            ws_legend.column_dimensions["B"].width = 14
-        except Exception:
-            pass
-    except Exception:
-        pass
-    # -------------------------------------------------------------------
-
-    ws.parent.save(out_xlsx)
+    wb.save(out_xlsx)
 
 
 import pandas as pd
@@ -1442,14 +1308,6 @@ def run(
             w.writerow(rec["sched"])
             w.writerow(["\n".join(x) for x in rec.get("onb", [])])
 
-    # 差分色を PREF.xlsx から取得（色分け設定の __DIFF__ 行など）
-    try:
-        _diff_hex = load_diff_color(pref_file) or _DIFFF_DEFAULT_HEX
-    except Exception:
-        _diff_hex = _DIFFF_DEFAULT_HEX
-    diff_fill = _PatternFill_for_prevmap(
-        fill_type="solid", start_color=_diff_hex, end_color=_diff_hex
-    )
     # Excel 出力前に、前回Excelが渡されていれば比較マップを構築
     prev_map = None
     if prev_excel:
@@ -1475,13 +1333,7 @@ def run(
 
     # Excel 出力
     write_to_excel(
-        schedule_file,
-        records,
-        emp_aff_map,
-        out_xlsx,
-        pref_rules,
-        prev_map=prev_map,
-        diff_fill=diff_fill,
+        schedule_file, records, emp_aff_map, out_xlsx, pref_rules, prev_map=prev_map
     )
 
     return out_csv, out_xlsx
@@ -1534,7 +1386,7 @@ def main():
         sim_file = args.sim or "SIM Slot List 202507_787.xlsx"
     else:
         schedule_file = args.schedule or "schedule350_08.csv"
-        pref_file = args.pref or "PREF350.xlsx"
+        pref_file = args.pref or "PREF.xlsx"
         # ⚠️ ファイル名の拡張子位置を修正
         sim_file = args.sim if args.sim is not None else "202508 SIM Slot List.xlsx"
         # sim_file を使わない場合は --sim "" と指定してください

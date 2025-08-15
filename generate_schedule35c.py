@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# === generate_schedule35d.py ===
+# === generate_schedule35c.py ===
 
 import pandas as pd
 import re
@@ -8,25 +8,6 @@ import xlsxwriter
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
-
-# === フィルター用：M列（hdr[12]）から養成期の数値を拾う ==================
-# 0-based index: A=0, ..., L=11, M=12
-HDR_IDX_M = 12
-
-
-def _phase_from_hdr_m(hdr):
-    """
-    ヘッダー配列 hdr の M 列（hdr[12]）を見て、
-    2～3桁の純粋な数字なら int で返す。そうでなければ None。
-    """
-    if not isinstance(hdr, (list, tuple)) or len(hdr) <= HDR_IDX_M:
-        return None
-    s = str(hdr[HDR_IDX_M] or "").strip()
-    return int(s) if s.isdigit() and 2 <= len(s) <= 3 else None
-
-
-# ===================================================================
-
 
 # === 前回Excel差分ハイライト (emp_no × day_index 比較) ==============
 import re as _re_for_prevmap
@@ -749,22 +730,6 @@ def write_to_excel(
                 shrink_to_fit=is_pe,
             )
 
-        # ── ここから追記：E列＝養成期フィルター（数値のみ） ─────────────────
-        # ラベルは1回だけ
-        if ws.cell(row=1, column=5).value not in ("養成期",):
-            ws.cell(row=1, column=5, value="養成期")
-
-        # ✅ M列は rec["hdr"][7]（0-based）です。F=0, G=1, ..., M=7
-        m_raw = str(rec["hdr"][7] if len(rec["hdr"]) > 7 else "").strip()
-        phase_num = int(m_raw) if (m_raw.isdigit() and 2 <= len(m_raw) <= 3) else None
-
-        ws.cell(
-            row=current_row,
-            column=5,
-            value=phase_num if phase_num is not None else None,
-        )
-        # ────────────────────────────────────────────────────────────────
-
         # 日付行
         for ci, dv in enumerate(rec["dr"], start=1):
             cell = ws.cell(row=current_row + 1, column=ci + offset, value=dv)
@@ -814,8 +779,8 @@ def write_to_excel(
 
         current_row += 3 + onboard_count
 
-    # フィルター範囲を A～E に（E=養成期フィルター列）
-    ws.auto_filter.ref = f"A1:E{ws.max_row}"
+    # オートフィルター設定（A～E 列）
+    ws.auto_filter.ref = f"A1:E{current_row - 1}"
 
     # ② 可変列数対応の CSV 読み込み（Streamlit BytesIO／ファイルパス 両対応）
     import csv, io, os
@@ -1534,7 +1499,7 @@ def main():
         sim_file = args.sim or "SIM Slot List 202507_787.xlsx"
     else:
         schedule_file = args.schedule or "schedule350_08.csv"
-        pref_file = args.pref or "PREF350.xlsx"
+        pref_file = args.pref or "PREF.xlsx"
         # ⚠️ ファイル名の拡張子位置を修正
         sim_file = args.sim if args.sim is not None else "202508 SIM Slot List.xlsx"
         # sim_file を使わない場合は --sim "" と指定してください
