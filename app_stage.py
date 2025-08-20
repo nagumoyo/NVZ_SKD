@@ -5,18 +5,20 @@ import inspect
 import importlib
 import importlib.util
 import tempfile
+import traceback
 from typing import Any, Dict, Union, Callable
 
 import streamlit as st
+
+# Ensure working directory = this script's folder (to mimic LOCAL behavior)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+os.chdir(SCRIPT_DIR)
 
 
 # ============================
 # Dynamic loader for `run()`
 # ============================
-def load_run_callable() -> Callable[..., Any]:
-    """
-    Import a function named `run` from user's generator module.
-    """
+def load_run_callable() -> tuple[str, Callable[..., Any]]:
     env_mod = os.environ.get("NAGU_GEN_MODULE")
     candidates = [env_mod] if env_mod else []
     candidates += [
@@ -28,17 +30,15 @@ def load_run_callable() -> Callable[..., Any]:
         "generate_schedule30c",
         "generate_schedule25c",
     ]
-
     for name in [c for c in candidates if c]:
         try:
             mod = importlib.import_module(name)
             if hasattr(mod, "run") and callable(getattr(mod, "run")):
-                return getattr(mod, "run")
+                return name, getattr(mod, "run")
         except Exception:
             pass
 
-    here = os.path.dirname(os.path.abspath(__file__))
-    pattern = os.path.join(here, "generate_schedule*.py")
+    pattern = os.path.join(SCRIPT_DIR, "generate_schedule*.py")
     paths = sorted(glob.glob(pattern), reverse=True)
     for path in paths:
         try:
@@ -51,75 +51,78 @@ def load_run_callable() -> Callable[..., Any]:
                 sys.modules[modname] = mod
                 spec.loader.exec_module(mod)
                 if hasattr(mod, "run") and callable(getattr(mod, "run")):
-                    return getattr(mod, "run")
+                    return modname, getattr(mod, "run")
         except Exception:
             continue
-
-    raise ImportError(
-        "run() を含む生成モジュールを読み込めませんでした。"
-        "NAGU_GEN_MODULE 環境変数にモジュール名（例: generate_schedule35e）を設定するか、"
-        "app_stage.py と同じフォルダに generate_schedule*.py を配置してください。"
-    )
+    raise ImportError("run() を含む生成モジュールを読み込めませんでした。")
 
 
-RUN = load_run_callable()
+MODULE_NAME, RUN = load_run_callable()
 
 
 # ============================
 # Helpers
 # ============================
 def _guess_kwargs_for_run(
-    sched: Union[str, io.BytesIO],
-    pref: Union[str, io.BytesIO],
-    sim: Union[str, io.BytesIO, None],
-    prev_xlsx: Union[str, io.BytesIO, None],
+    sched_path: str,
+    pref_path: str,
+    sim_path: Union[str, None],
+    prev_xlsx_path: Union[str, None],
     compare_flag: bool,
 ) -> Dict[str, Any]:
-    """
-    Build kwargs for run() based on its signature to avoid breaking changes.
-    """
     sig = inspect.signature(RUN)
     param_names = list(sig.parameters.keys())
     kw: Dict[str, Any] = {}
 
-    sched_keys = ["schedule_file", "schedule", "sched_file", "schedule_path"]
-    pref_keys = ["pref_file", "pref", "pref_path"]
-    sim_keys = ["sim_file", "sim", "simslot_file", "simslot_path"]
-    prev_keys = ["prev_xlsx", "prev_excel", "prev_file", "previous_xlsx"]
-    compare_keys = ["compare_prev", "diff_mode", "compare", "is_compare"]
+    # Map by common names; always pass PATHS (not BytesIO) to mimic LOCAL
+    mapping = {
+        "schedule_file": sched_path,
+        "schedule": sched_path,
+        "sched_file": sched_path,
+        "schedule_path": sched_path,
+        "pref_file": pref_path,
+        "pref": pref_path,
+        "pref_path": pref_path,
+        "sim_file": sim_path,
+        "sim": sim_path,
+        "simslot_file": sim_path,
+        "simslot_path": sim_path,
+        "prev_xlsx": prev_xlsx_path,
+        "prev_excel": prev_xlsx_path,
+        "prev_file": prev_xlsx_path,
+        "previous_xlsx": prev_xlsx_path,
+        "compare_prev": bool(compare_flag),
+        "diff_mode": bool(compare_flag),
+        "compare": bool(compare_flag),
+        "is_compare": bool(compare_flag),
+    }
+    for k in param_names:
+        if k in mapping and mapping[k] is not None:
+            kw[k] = mapping[k]
 
-    for k in sched_keys:
-        if k in param_names:
-            kw[k] = sched
-            break
-    for k in pref_keys:
-        if k in param_names:
-            kw[k] = pref
-            break
-    for k in sim_keys:
-        if k in param_names and sim is not None:
-            kw[k] = sim
-            break
-    for k in prev_keys:
-        if k in param_names and prev_xlsx is not None:
-            kw[k] = prev_xlsx
-            break
-    for k in compare_keys:
-        if k in param_names:
-            kw[k] = bool(compare_flag)
-            break
-
+    # If nothing matched and exactly 3 params, pass positionally (sched, pref, sim)
     if not kw and len(param_names) == 3:
-        return {param_names[0]: sched, param_names[1]: pref, param_names[2]: sim}
+        return {
+            param_names[0]: sched_path,
+            param_names[1]: pref_path,
+            param_names[2]: sim_path,
+        }
     return kw
+
+
+def _save_temp_from_upload(uploaded, suffix: str) -> str:
+    raw = uploaded.getvalue()
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=SCRIPT_DIR)
+    tmp.write(raw)
+    tmp.flush()
+    tmp.close()
+    return tmp.name
 
 
 def _to_bytes(path_or_bytes: Union[str, bytes, bytearray, io.BytesIO, None]) -> bytes:
     if path_or_bytes is None:
         return b""
-    if isinstance(path_or_bytes, bytes):
-        return path_or_bytes
-    if isinstance(path_or_bytes, bytearray):
+    if isinstance(path_or_bytes, (bytes, bytearray)):
         return bytes(path_or_bytes)
     if isinstance(path_or_bytes, io.BytesIO):
         path_or_bytes.seek(0)
@@ -128,49 +131,33 @@ def _to_bytes(path_or_bytes: Union[str, bytes, bytearray, io.BytesIO, None]) -> 
         with open(path_or_bytes, "rb") as f:
             return f.read()
     if hasattr(path_or_bytes, "read"):
-        return path_or_bytes.read()  # type: ignore[attr-defined]
+        return path_or_bytes.read()  # type: ignore
     return bytes(path_or_bytes)
 
 
-def _save_temp_from_upload(uploaded, suffix: str) -> str:
-    """
-    Save the uploaded file bytes AS-IS to a real temp file and return the path.
-    No transcoding, no normalization (preserve original encoding & bytes).
-    """
-    raw = uploaded.getvalue()
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    tmp.write(raw)
-    tmp.flush()
-    tmp.close()
-    return tmp.name
-
-
-def _save_temp_bytes(data: Union[io.BytesIO, bytes, bytearray], suffix: str) -> str:
-    if isinstance(data, io.BytesIO):
-        data.seek(0)
-        content = data.read()
-    elif isinstance(data, (bytes, bytearray)):
-        content = bytes(data)
-    else:
-        raise TypeError("Unsupported type for _save_temp_bytes")
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    tmp.write(content)
-    tmp.flush()
-    tmp.close()
-    return tmp.name
+def _stat(path: Union[str, None]) -> dict:
+    if not path:
+        return {"exists": False}
+    try:
+        stt = os.stat(path)
+        return {"exists": True, "size": stt.st_size, "path": path}
+    except FileNotFoundError:
+        return {"exists": False, "path": path}
+    except Exception as e:
+        return {"exists": False, "path": path, "error": str(e)}
 
 
 # ============================
 # UI
 # ============================
 st.set_page_config(
-    page_title="✈ NAGU 乗務割整形支援ツール（STAGE）",
+    page_title="✈ NAGU 乗務割整形支援ツール（STAGE, Path-Only+Debug）",
     page_icon="✈️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.title("🧪 STAGE：NAGU 乗務割整形支援ツール")
+st.title("🧪 STAGE（Path固定・デバッグ表示）")
 
 with st.sidebar:
     st.markdown("### 入力ファイル")
@@ -189,37 +176,45 @@ with st.sidebar:
     st.divider()
     run_btn = st.button("🚀 実行", use_container_width=True)
 
+st.markdown("#### 実行環境")
+st.code(
+    f"CWD: {os.getcwd()}\nSCRIPT_DIR: {SCRIPT_DIR}\nMODULE: {MODULE_NAME}\nRUN signature: {inspect.signature(RUN)}",
+    language="bash",
+)
+
 # Main
 if run_btn:
     if not sched_up or not pref_up:
         st.error("スケジュールCSV と PREF.xlsx は必須です。")
         st.stop()
 
+    # Save all uploads to real files (no transcoding) to mirror LOCAL behavior
+    sched_path = _save_temp_from_upload(sched_up, ".csv")
+    pref_path = _save_temp_from_upload(pref_up, ".xlsx")
+    sim_path = _save_temp_from_upload(sim_up, ".xlsx") if sim_up else None
+    prev_path = (
+        _save_temp_from_upload(prev_up, ".xlsx") if (compare and prev_up) else None
+    )
+
+    # Show saved paths and existence
+    st.markdown("#### 入力ファイルの保存状態")
+    st.json(
+        {
+            "schedule": _stat(sched_path),
+            "pref": _stat(pref_path),
+            "sim": _stat(sim_path),
+            "prev_xlsx": _stat(prev_path),
+        }
+    )
+
     try:
-        # CRITICAL: Always pass SCHEDULE as a REAL PATH (preserve original bytes/encoding).
-        sched_path = _save_temp_from_upload(sched_up, ".csv")
-
-        # For Excel inputs we can pass BytesIO first, but will fall back to paths if needed.
-        pref_io = io.BytesIO(pref_up.getvalue())
-        sim_io = io.BytesIO(sim_up.getvalue()) if sim_up else None
-        prev_io = io.BytesIO(prev_up.getvalue()) if (compare and prev_up) else None
-
-        # First attempt: run with (sched_path, pref_io, sim_io, prev_io)
         kwargs = _guess_kwargs_for_run(
-            sched_path, pref_io, sim_io, prev_io, compare_flag=compare
+            sched_path, pref_path, sim_path, prev_path, compare_flag=compare
         )
-        try:
-            result = RUN(**kwargs)
-        except TypeError:
-            # Some implementations expect all file paths – fall back.
-            pref_path = _save_temp_bytes(pref_io, ".xlsx")
-            sim_path = _save_temp_bytes(sim_io, ".xlsx") if sim_io else None
-            prev_path = _save_temp_bytes(prev_io, ".xlsx") if prev_io else None
+        st.markdown("#### run() に渡す引数")
+        st.json({k: (v if isinstance(v, bool) else str(v)) for k, v in kwargs.items()})
 
-            kwargs2 = _guess_kwargs_for_run(
-                sched_path, pref_path, sim_path, prev_path, compare_flag=compare
-            )
-            result = RUN(**kwargs2)
+        result = RUN(**kwargs)
 
         # Normalize result
         csv_bytes: bytes = b""
@@ -256,7 +251,6 @@ if run_btn:
             )
 
         st.success("処理が完了しました。ダウンロードしてください。")
-
         if xlsx_bytes:
             st.download_button(
                 label="📥 Excel（.xlsx）をダウンロード",
@@ -264,44 +258,19 @@ if run_btn:
                 file_name=xlsx_name,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-        else:
-            st.info("Excel 出力が見つかりませんでした。")
-
         if csv_bytes:
-            # Offer CSV as received (we don't re-encode here; use UTF-8 BOM + CP932 from text decode)
-            try:
-                text = csv_bytes.decode("utf-8-sig")
-            except Exception:
-                try:
-                    text = csv_bytes.decode("utf-8")
-                except Exception:
-                    try:
-                        text = csv_bytes.decode("cp932")
-                    except Exception:
-                        text = csv_bytes.decode("utf-8", errors="replace")
-            utf8_bom = text.encode("utf-8-sig")
-            try:
-                cp932 = text.encode("cp932", errors="strict")
-            except Exception:
-                cp932 = text.encode("cp932", errors="replace")
+            st.download_button(
+                label="CSV（生のまま）",
+                data=csv_bytes,
+                file_name=csv_name,
+                mime="text/csv",
+            )
 
-            col1, col2 = st.columns(2)
-            with col1:
-                st.download_button(
-                    label="CSV（UTF-8 BOM付き）",
-                    data=utf8_bom,
-                    file_name=os.path.splitext(csv_name)[0] + "_utf8.csv",
-                    mime="text/csv",
-                )
-            with col2:
-                st.download_button(
-                    label="CSV（Excel向けCP932）",
-                    data=cp932,
-                    file_name=os.path.splitext(csv_name)[0] + "_cp932.csv",
-                    mime="text/csv",
-                )
-        else:
-            st.info("CSV 出力が見つかりませんでした。")
-
+    except FileNotFoundError as fnf:
+        st.error(f"FileNotFoundError: {fnf}")
+        st.code("\\n".join(os.listdir(os.getcwd())))
+        st.code(traceback.format_exc())
     except Exception as e:
         st.error(f"処理中にエラーが発生しました：{e}")
+        st.code("\\n".join(os.listdir(os.getcwd())))
+        st.code(traceback.format_exc())
