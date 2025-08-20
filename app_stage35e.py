@@ -15,7 +15,7 @@ import streamlit as st
 # ============================
 def load_run_callable() -> Callable[..., Any]:
     """
-    Import a function named `run` from user's generator module.
+    Try to import a function named `run` from the user's generator module.
     """
     env_mod = os.environ.get("NAGU_GEN_MODULE")
     candidates = [env_mod] if env_mod else []
@@ -69,15 +69,12 @@ RUN = load_run_callable()
 # Helpers
 # ============================
 def _guess_kwargs_for_run(
-    sched: Union[str, io.BytesIO],
-    pref: Union[str, io.BytesIO],
-    sim: Union[str, io.BytesIO, None],
-    prev_xlsx: Union[str, io.BytesIO, None],
+    sched: Union[io.BytesIO, str],
+    pref: Union[io.BytesIO, str],
+    sim: Union[io.BytesIO, str, None],
+    prev_xlsx: Union[io.BytesIO, str, None],
     compare_flag: bool,
 ) -> Dict[str, Any]:
-    """
-    Build kwargs for run() based on its signature to avoid breaking changes.
-    """
     sig = inspect.signature(RUN)
     param_names = list(sig.parameters.keys())
     kw: Dict[str, Any] = {}
@@ -132,32 +129,65 @@ def _to_bytes(path_or_bytes: Union[str, bytes, bytearray, io.BytesIO, None]) -> 
     return bytes(path_or_bytes)
 
 
-def _save_temp_from_upload(uploaded, suffix: str) -> str:
-    """
-    Save the uploaded file bytes AS-IS to a real temp file and return the path.
-    No transcoding, no normalization (preserve original encoding & bytes).
-    """
-    raw = uploaded.getvalue()
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    tmp.write(raw)
-    tmp.flush()
-    tmp.close()
-    return tmp.name
+def _read_csv_text(csv_source: Union[str, bytes, bytearray, io.BytesIO]) -> str:
+    raw: bytes
+    if isinstance(csv_source, (bytes, bytearray)):
+        raw = bytes(csv_source)
+    elif isinstance(csv_source, io.BytesIO):
+        csv_source.seek(0)
+        raw = csv_source.read()
+    elif isinstance(csv_source, str):
+        with open(csv_source, "rb") as f:
+            raw = f.read()
+    else:
+        try:
+            raw = csv_source.read()  # type: ignore[attr-defined]
+        except Exception:
+            raw = b""
+
+    for enc in ("utf-8-sig", "utf-8", "cp932", "utf-16", "utf-16le", "utf-16be"):
+        try:
+            return raw.decode(enc)
+        except Exception:
+            continue
+    return raw.decode("utf-8", errors="replace")
 
 
-def _save_temp_bytes(data: Union[io.BytesIO, bytes, bytearray], suffix: str) -> str:
+def _save_temp(data: Union[io.BytesIO, bytes, bytearray], suffix: str) -> str:
     if isinstance(data, io.BytesIO):
         data.seek(0)
         content = data.read()
     elif isinstance(data, (bytes, bytearray)):
         content = bytes(data)
     else:
-        raise TypeError("Unsupported type for _save_temp_bytes")
+        raise TypeError("Unsupported type for _save_temp")
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     tmp.write(content)
     tmp.flush()
     tmp.close()
     return tmp.name
+
+
+def _normalize_csv_upload(
+    uploaded: "st.runtime.uploaded_file_manager.UploadedFile",
+) -> io.BytesIO:
+    """
+    Normalize user-uploaded CSV bytes to UTF-8 (no BOM) so that pandas default decoding works.
+    """
+    raw = uploaded.getvalue()
+    # Try common JP encodings; fall back to 'replace'
+    for enc in ("utf-8-sig", "utf-8", "cp932", "utf-16", "utf-16le", "utf-16be"):
+        try:
+            text = raw.decode(enc)
+            break
+        except Exception:
+            text = None
+    if text is None:
+        text = raw.decode("utf-8", errors="replace")
+    # Normalize newlines
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    # Re-encode to UTF-8 (no BOM). Pandas default will decode it correctly.
+    return io.BytesIO(text.encode("utf-8"))
 
 
 # ============================
@@ -196,25 +226,26 @@ if run_btn:
         st.stop()
 
     try:
-        # CRITICAL: Always pass SCHEDULE as a REAL PATH (preserve original bytes/encoding).
-        sched_path = _save_temp_from_upload(sched_up, ".csv")
+        # Normalize CSV to UTF-8 for robust downstream decoding
+        sched_io = _normalize_csv_upload(sched_up)
 
-        # For Excel inputs we can pass BytesIO first, but will fall back to paths if needed.
+        # Excel files: just pass through
         pref_io = io.BytesIO(pref_up.getvalue())
         sim_io = io.BytesIO(sim_up.getvalue()) if sim_up else None
         prev_io = io.BytesIO(prev_up.getvalue()) if (compare and prev_up) else None
 
-        # First attempt: run with (sched_path, pref_io, sim_io, prev_io)
+        # First attempt: call run with BytesIOs (preferred for Streamlit)
         kwargs = _guess_kwargs_for_run(
-            sched_path, pref_io, sim_io, prev_io, compare_flag=compare
+            sched_io, pref_io, sim_io, prev_io, compare_flag=compare
         )
         try:
             result = RUN(**kwargs)
         except TypeError:
-            # Some implementations expect all file paths – fall back.
-            pref_path = _save_temp_bytes(pref_io, ".xlsx")
-            sim_path = _save_temp_bytes(sim_io, ".xlsx") if sim_io else None
-            prev_path = _save_temp_bytes(prev_io, ".xlsx") if prev_io else None
+            # Fallback to temp files
+            sched_path = _save_temp(sched_io, ".csv")
+            pref_path = _save_temp(pref_io, ".xlsx")
+            sim_path = _save_temp(sim_io, ".xlsx") if sim_io else None
+            prev_path = _save_temp(prev_io, ".xlsx") if prev_io else None
 
             kwargs2 = _guess_kwargs_for_run(
                 sched_path, pref_path, sim_path, prev_path, compare_flag=compare
@@ -235,6 +266,7 @@ if run_btn:
                 xlsx_name = os.path.basename(xlsx_src)
             csv_bytes = _to_bytes(csv_src)
             xlsx_bytes = _to_bytes(xlsx_src)
+
         elif isinstance(result, dict):
             csv_src = (
                 result.get("csv") or result.get("csv_bytes") or result.get("csv_path")
@@ -250,11 +282,15 @@ if run_btn:
                 xlsx_name = result["xlsx_name"]
             csv_bytes = _to_bytes(csv_src) if csv_src is not None else b""
             xlsx_bytes = _to_bytes(xlsx_src) if xlsx_src is not None else b""
+
         else:
             raise RuntimeError(
                 "run() の戻り値形式が想定外です。tuple(list)かdictを返してください。"
             )
 
+        # ============================
+        # Download buttons
+        # ============================
         st.success("処理が完了しました。ダウンロードしてください。")
 
         if xlsx_bytes:
@@ -268,35 +304,25 @@ if run_btn:
             st.info("Excel 出力が見つかりませんでした。")
 
         if csv_bytes:
-            # Offer CSV as received (we don't re-encode here; use UTF-8 BOM + CP932 from text decode)
+            csv_text = _read_csv_text(csv_bytes)
+            csv_utf8_sig = csv_text.encode("utf-8-sig")
             try:
-                text = csv_bytes.decode("utf-8-sig")
+                csv_cp932 = csv_text.encode("cp932", errors="strict")
             except Exception:
-                try:
-                    text = csv_bytes.decode("utf-8")
-                except Exception:
-                    try:
-                        text = csv_bytes.decode("cp932")
-                    except Exception:
-                        text = csv_bytes.decode("utf-8", errors="replace")
-            utf8_bom = text.encode("utf-8-sig")
-            try:
-                cp932 = text.encode("cp932", errors="strict")
-            except Exception:
-                cp932 = text.encode("cp932", errors="replace")
+                csv_cp932 = csv_text.encode("cp932", errors="replace")
 
             col1, col2 = st.columns(2)
             with col1:
                 st.download_button(
                     label="CSV（UTF-8 BOM付き）",
-                    data=utf8_bom,
+                    data=csv_utf8_sig,
                     file_name=os.path.splitext(csv_name)[0] + "_utf8.csv",
                     mime="text/csv",
                 )
             with col2:
                 st.download_button(
                     label="CSV（Excel向けCP932）",
-                    data=cp932,
+                    data=csv_cp932,
                     file_name=os.path.splitext(csv_name)[0] + "_cp932.csv",
                     mime="text/csv",
                 )
