@@ -110,13 +110,65 @@ def _guess_kwargs_for_run(
     return kw
 
 
-def _save_temp_from_upload(uploaded, suffix: str) -> str:
-    raw = uploaded.getvalue()
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=SCRIPT_DIR)
-    tmp.write(raw)
+def _save_temp_binary(data: bytes, suffix: str, *, dir_: str = SCRIPT_DIR) -> str:
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=dir_)
+    tmp.write(data)
     tmp.flush()
     tmp.close()
     return tmp.name
+
+
+def _save_temp_from_upload(uploaded, suffix: str) -> str:
+    """バイナリのまま保存（変換なし）"""
+    raw = uploaded.getvalue()
+    return _save_temp_binary(raw, suffix, dir_=SCRIPT_DIR)
+
+
+def _decode_best_effort(raw: bytes) -> str:
+    """日本語CSV向け：よくある候補で順に試してテキスト化"""
+    for enc in (
+        "utf-8-sig",
+        "utf-8",
+        "cp932",
+        "shift_jis",
+        "utf-16",
+        "utf-16le",
+        "utf-16be",
+    ):
+        try:
+            return raw.decode(enc)
+        except Exception:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _ensure_utf8_csv_path_from_upload(uploaded) -> tuple[str, str]:
+    """
+    アップロードCSVを検査し、UTF-8(BOM) に正規化した一時CSVのパスを返す。
+    戻り値: (csv_path, note)
+      - csv_path: run() に渡すべき CSV のパス
+      - note: どのような処理をしたかの説明
+    """
+    raw = uploaded.getvalue()
+
+    # 1) まず UTF-8 として素で読めるかをチェック
+    try:
+        raw.decode("utf-8")  # BOM 有無は問わない
+        # 読めた場合は、そのまま（BOM を付けずに）使っても良いが、
+        # pandas 側の挙動を安定させるため UTF-8(BOM) へ揃える
+        text = raw.decode("utf-8")
+        # 改行の正規化（お好みで）
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        path = _save_temp_binary(text.encode("utf-8-sig"), ".csv", dir_=SCRIPT_DIR)
+        return path, "input: utf-8 / normalized to utf-8-sig"
+    except Exception:
+        pass
+
+    # 2) UTF-8 で読めない → cp932 / shift_jis 等で読み直して UTF-8(BOM) へ
+    text = _decode_best_effort(raw)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    path = _save_temp_binary(text.encode("utf-8-sig"), ".csv", dir_=SCRIPT_DIR)
+    return path, "input: non-utf8 / transcoded to utf-8-sig"
 
 
 def _to_bytes(path_or_bytes: Union[str, bytes, bytearray, io.BytesIO, None]) -> bytes:
@@ -151,13 +203,13 @@ def _stat(path: Union[str, None]) -> dict:
 # UI
 # ============================
 st.set_page_config(
-    page_title="✈ NAGU 乗務割整形支援ツール（STAGE, Path-Only+Debug）",
+    page_title="✈ NAGU 乗務割整形支援ツール（STAGE, UTF-8 正規化対応）",
     page_icon="✈️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.title("🧪 STAGE（Path固定・デバッグ表示）")
+st.title("🧪 STAGE（CSVをUTF-8(BOM)へ正規化してから run() に渡します）")
 
 with st.sidebar:
     st.markdown("### 入力ファイル")
@@ -188,8 +240,8 @@ if run_btn:
         st.error("スケジュールCSV と PREF.xlsx は必須です。")
         st.stop()
 
-    # Save all uploads to real files (no transcoding) to mirror LOCAL behavior
-    sched_path = _save_temp_from_upload(sched_up, ".csv")
+    # 保存（PREF/SIM/prev は変換なし / CSV は UTF-8(BOM) に正規化した新規ファイルを作る）
+    sched_path, sched_note = _ensure_utf8_csv_path_from_upload(sched_up)
     pref_path = _save_temp_from_upload(pref_up, ".xlsx")
     sim_path = _save_temp_from_upload(sim_up, ".xlsx") if sim_up else None
     prev_path = (
@@ -200,7 +252,7 @@ if run_btn:
     st.markdown("#### 入力ファイルの保存状態")
     st.json(
         {
-            "schedule": _stat(sched_path),
+            "schedule": _stat(sched_path) | {"note": sched_note},
             "pref": _stat(pref_path),
             "sim": _stat(sim_path),
             "prev_xlsx": _stat(prev_path),
