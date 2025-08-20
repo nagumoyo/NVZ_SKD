@@ -16,23 +16,9 @@ import streamlit as st
 def load_run_callable() -> Callable[..., Any]:
     """
     Try to import a function named `run` from the user's generator module.
-
-    Search order:
-      1) Environment variable NAGU_GEN_MODULE (e.g., 'generate_schedule35e')
-      2) Import by common module names ('generate_schedule', 'generate_schedule35e', ...)
-      3) Scan current dir for files matching 'generate_schedule*.py' and import the newest-looking
-
-    Returns:
-      A callable object (the `run` function).
-
-    Raises:
-      ImportError if not found.
     """
-    # 1) Env var hint
     env_mod = os.environ.get("NAGU_GEN_MODULE")
     candidates = [env_mod] if env_mod else []
-
-    # 2) Common names
     candidates += [
         "generate_schedule",
         "generate_schedule35e",
@@ -43,7 +29,6 @@ def load_run_callable() -> Callable[..., Any]:
         "generate_schedule25c",
     ]
 
-    # Try direct imports first
     for name in [c for c in candidates if c]:
         try:
             mod = importlib.import_module(name)
@@ -52,10 +37,9 @@ def load_run_callable() -> Callable[..., Any]:
         except Exception:
             pass
 
-    # 3) Scan local directory for generate_schedule*.py
     here = os.path.dirname(os.path.abspath(__file__))
     pattern = os.path.join(here, "generate_schedule*.py")
-    paths = sorted(glob.glob(pattern), reverse=True)  # prefer later-suffixed names
+    paths = sorted(glob.glob(pattern), reverse=True)
     for path in paths:
         try:
             modname = os.path.splitext(os.path.basename(path))[0]
@@ -78,7 +62,6 @@ def load_run_callable() -> Callable[..., Any]:
     )
 
 
-# Obtain the callable once (avoid repeated import work)
 RUN = load_run_callable()
 
 
@@ -92,21 +75,16 @@ def _guess_kwargs_for_run(
     prev_xlsx: Union[io.BytesIO, str, None],
     compare_flag: bool,
 ) -> Dict[str, Any]:
-    """
-    Build kwargs for run() based on its signature to avoid breaking changes.
-    """
     sig = inspect.signature(RUN)
     param_names = list(sig.parameters.keys())
     kw: Dict[str, Any] = {}
 
-    # Common param name variants
     sched_keys = ["schedule_file", "schedule", "sched_file", "schedule_path"]
     pref_keys = ["pref_file", "pref", "pref_path"]
     sim_keys = ["sim_file", "sim", "simslot_file", "simslot_path"]
     prev_keys = ["prev_xlsx", "prev_excel", "prev_file", "previous_xlsx"]
     compare_keys = ["compare_prev", "diff_mode", "compare", "is_compare"]
 
-    # Map provided inputs to actual param names if present
     for k in sched_keys:
         if k in param_names:
             kw[k] = sched
@@ -128,17 +106,12 @@ def _guess_kwargs_for_run(
             kw[k] = bool(compare_flag)
             break
 
-    # If function only has exactly 3 params, pass positionally as a fallback
     if not kw and len(param_names) == 3:
-        # Assume ordering: (schedule_file, pref_file, sim_file)
         return {param_names[0]: sched, param_names[1]: pref, param_names[2]: sim}
     return kw
 
 
 def _to_bytes(path_or_bytes: Union[str, bytes, bytearray, io.BytesIO, None]) -> bytes:
-    """
-    Normalize various return types (path / bytes / buffer) to raw bytes for download.
-    """
     if path_or_bytes is None:
         return b""
     if isinstance(path_or_bytes, bytes):
@@ -149,20 +122,14 @@ def _to_bytes(path_or_bytes: Union[str, bytes, bytearray, io.BytesIO, None]) -> 
         path_or_bytes.seek(0)
         return path_or_bytes.read()
     if isinstance(path_or_bytes, str):
-        # treat as path
         with open(path_or_bytes, "rb") as f:
             return f.read()
-    # Unknown type -> try best effort
     if hasattr(path_or_bytes, "read"):
         return path_or_bytes.read()  # type: ignore[attr-defined]
-    # Fallback
     return bytes(path_or_bytes)
 
 
 def _read_csv_text(csv_source: Union[str, bytes, bytearray, io.BytesIO]) -> str:
-    """
-    Obtain CSV text (str) from path/bytes/buffer with UTF-8-first strategy.
-    """
     raw: bytes
     if isinstance(csv_source, (bytes, bytearray)):
         raw = bytes(csv_source)
@@ -178,20 +145,15 @@ def _read_csv_text(csv_source: Union[str, bytes, bytearray, io.BytesIO]) -> str:
         except Exception:
             raw = b""
 
-    # Try UTF-8 (with BOM) first
-    for enc in ("utf-8-sig", "utf-8", "cp932"):
+    for enc in ("utf-8-sig", "utf-8", "cp932", "utf-16", "utf-16le", "utf-16be"):
         try:
             return raw.decode(enc)
         except Exception:
             continue
-    # Last resort: replace errors
     return raw.decode("utf-8", errors="replace")
 
 
 def _save_temp(data: Union[io.BytesIO, bytes, bytearray], suffix: str) -> str:
-    """
-    Persist uploaded content to a temporary file and return its path.
-    """
     if isinstance(data, io.BytesIO):
         data.seek(0)
         content = data.read()
@@ -204,6 +166,28 @@ def _save_temp(data: Union[io.BytesIO, bytes, bytearray], suffix: str) -> str:
     tmp.flush()
     tmp.close()
     return tmp.name
+
+
+def _normalize_csv_upload(
+    uploaded: "st.runtime.uploaded_file_manager.UploadedFile",
+) -> io.BytesIO:
+    """
+    Normalize user-uploaded CSV bytes to UTF-8 (no BOM) so that pandas default decoding works.
+    """
+    raw = uploaded.getvalue()
+    # Try common JP encodings; fall back to 'replace'
+    for enc in ("utf-8-sig", "utf-8", "cp932", "utf-16", "utf-16le", "utf-16be"):
+        try:
+            text = raw.decode(enc)
+            break
+        except Exception:
+            text = None
+    if text is None:
+        text = raw.decode("utf-8", errors="replace")
+    # Normalize newlines
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    # Re-encode to UTF-8 (no BOM). Pandas default will decode it correctly.
+    return io.BytesIO(text.encode("utf-8"))
 
 
 # ============================
@@ -242,8 +226,10 @@ if run_btn:
         st.stop()
 
     try:
-        # Prepare in-memory buffers
-        sched_io = io.BytesIO(sched_up.getvalue())
+        # Normalize CSV to UTF-8 for robust downstream decoding
+        sched_io = _normalize_csv_upload(sched_up)
+
+        # Excel files: just pass through
         pref_io = io.BytesIO(pref_up.getvalue())
         sim_io = io.BytesIO(sim_up.getvalue()) if sim_up else None
         prev_io = io.BytesIO(prev_up.getvalue()) if (compare and prev_up) else None
@@ -255,7 +241,7 @@ if run_btn:
         try:
             result = RUN(**kwargs)
         except TypeError:
-            # Some implementations expect file paths; fall back to temp files
+            # Fallback to temp files
             sched_path = _save_temp(sched_io, ".csv")
             pref_path = _save_temp(pref_io, ".xlsx")
             sim_path = _save_temp(sim_io, ".xlsx") if sim_io else None
@@ -274,17 +260,14 @@ if run_btn:
 
         if isinstance(result, (tuple, list)) and len(result) == 2:
             csv_src, xlsx_src = result
-            # Guess filenames from paths
             if isinstance(csv_src, str):
                 csv_name = os.path.basename(csv_src)
             if isinstance(xlsx_src, str):
                 xlsx_name = os.path.basename(xlsx_src)
-            # Convert to bytes
             csv_bytes = _to_bytes(csv_src)
             xlsx_bytes = _to_bytes(xlsx_src)
 
         elif isinstance(result, dict):
-            # Accept flexible keys
             csv_src = (
                 result.get("csv") or result.get("csv_bytes") or result.get("csv_path")
             )
@@ -310,7 +293,6 @@ if run_btn:
         # ============================
         st.success("処理が完了しました。ダウンロードしてください。")
 
-        # Excel (XLSX) — pass raw bytes (not file object) to avoid corruption
         if xlsx_bytes:
             st.download_button(
                 label="📥 Excel（.xlsx）をダウンロード",
@@ -321,12 +303,9 @@ if run_btn:
         else:
             st.info("Excel 出力が見つかりませんでした。")
 
-        # CSV — provide both UTF-8 with BOM and CP932 (Excel向け) for safety
         if csv_bytes:
             csv_text = _read_csv_text(csv_bytes)
-            # UTF-8 with BOM
             csv_utf8_sig = csv_text.encode("utf-8-sig")
-            # Excel JP friendly (CP932)
             try:
                 csv_cp932 = csv_text.encode("cp932", errors="strict")
             except Exception:
