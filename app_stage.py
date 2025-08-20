@@ -124,53 +124,6 @@ def _save_temp_from_upload(uploaded, suffix: str) -> str:
     return _save_temp_binary(raw, suffix, dir_=SCRIPT_DIR)
 
 
-def _decode_best_effort(raw: bytes) -> str:
-    """日本語CSV向け：よくある候補で順に試してテキスト化"""
-    for enc in (
-        "utf-8-sig",
-        "utf-8",
-        "cp932",
-        "shift_jis",
-        "utf-16",
-        "utf-16le",
-        "utf-16be",
-    ):
-        try:
-            return raw.decode(enc)
-        except Exception:
-            continue
-    return raw.decode("utf-8", errors="replace")
-
-
-def _ensure_utf8_csv_path_from_upload(uploaded) -> tuple[str, str]:
-    """
-    アップロードCSVを検査し、UTF-8(BOM) に正規化した一時CSVのパスを返す。
-    戻り値: (csv_path, note)
-      - csv_path: run() に渡すべき CSV のパス
-      - note: どのような処理をしたかの説明
-    """
-    raw = uploaded.getvalue()
-
-    # 1) まず UTF-8 として素で読めるかをチェック
-    try:
-        raw.decode("utf-8")  # BOM 有無は問わない
-        # 読めた場合は、そのまま（BOM を付けずに）使っても良いが、
-        # pandas 側の挙動を安定させるため UTF-8(BOM) へ揃える
-        text = raw.decode("utf-8")
-        # 改行の正規化（お好みで）
-        text = text.replace("\r\n", "\n").replace("\r", "\n")
-        path = _save_temp_binary(text.encode("utf-8-sig"), ".csv", dir_=SCRIPT_DIR)
-        return path, "input: utf-8 / normalized to utf-8-sig"
-    except Exception:
-        pass
-
-    # 2) UTF-8 で読めない → cp932 / shift_jis 等で読み直して UTF-8(BOM) へ
-    text = _decode_best_effort(raw)
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    path = _save_temp_binary(text.encode("utf-8-sig"), ".csv", dir_=SCRIPT_DIR)
-    return path, "input: non-utf8 / transcoded to utf-8-sig"
-
-
 def _to_bytes(path_or_bytes: Union[str, bytes, bytearray, io.BytesIO, None]) -> bytes:
     if path_or_bytes is None:
         return b""
@@ -199,17 +152,82 @@ def _stat(path: Union[str, None]) -> dict:
         return {"exists": False, "path": path, "error": str(e)}
 
 
+# ---------- 混在エンコーディング対応（UTF-8＋SJIS） ----------
+def _is_sjis_pair(b1: int, b2: int) -> bool:
+    # SJIS: lead 0x81–0x9F or 0xE0–0xFC, trail 0x40–0x7E or 0x80–0xFC（0x7F除く）
+    return ((0x81 <= b1 <= 0x9F) or (0xE0 <= b1 <= 0xFC)) and (
+        (0x40 <= b2 <= 0x7E) or (0x80 <= b2 <= 0xFC)
+    )
+
+
+def _mixed_utf8_sjis_to_text(raw: bytes) -> str:
+    """
+    先頭から走査し、UTF-8 で切れる所は UTF-8 として読む。
+    そこで読めなければ SJIS の2バイト並びを優先的に解釈。
+    どちらでもなければ置換（'�'）で前進。
+    """
+    out = []
+    i = 0
+    n = len(raw)
+    while i < n:
+        # UTF-8 を 1〜4バイトで試す
+        got = False
+        for l in (1, 2, 3, 4):
+            if i + l <= n:
+                try:
+                    ch = raw[i : i + l].decode("utf-8")
+                    out.append(ch)
+                    i += l
+                    got = True
+                    break
+                except UnicodeDecodeError:
+                    pass
+        if got:
+            continue
+        # SJIS の2バイト並びを試す
+        if i + 1 < n and _is_sjis_pair(raw[i], raw[i + 1]):
+            try:
+                out.append(bytes([raw[i], raw[i + 1]]).decode("cp932"))
+            except Exception:
+                out.append("�")
+            i += 2
+            continue
+        # ASCII 単バイトはそのまま、その他は置換
+        b = raw[i]
+        out.append(chr(b) if b < 0x80 else "�")
+        i += 1
+    return "".join(out)
+
+
+def _ensure_cp932_csv_path_from_upload(uploaded) -> tuple[str, str]:
+    """
+    アップロードCSVをミックス復号→最終的に CP932 で再エンコードして
+    一時CSVに保存し、そのパスを返す。
+    戻り値: (csv_path, note)
+    """
+    raw = uploaded.getvalue()
+    text = _mixed_utf8_sjis_to_text(raw)
+    # 改行をLFに正規化（必要なければ外してOK）
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    try:
+        data = text.encode("cp932", errors="strict")
+    except Exception:
+        data = text.encode("cp932", errors="replace")
+    tmp_path = _save_temp_binary(data, ".csv", dir_=SCRIPT_DIR)
+    return tmp_path, "normalized: mixed UTF-8/SJIS → CP932"
+
+
 # ============================
 # UI
 # ============================
 st.set_page_config(
-    page_title="✈ NAGU 乗務割整形支援ツール（STAGE, UTF-8 正規化対応）",
+    page_title="✈ NAGU 乗務割整形支援ツール（STAGE, Mixed-encoding Normalizer）",
     page_icon="✈️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.title("🧪 STAGE（CSVをUTF-8(BOM)へ正規化してから run() に渡します）")
+st.title("🧪 STAGE（混在エンコーディング補正 → CP932 正規化）")
 
 with st.sidebar:
     st.markdown("### 入力ファイル")
@@ -240,8 +258,10 @@ if run_btn:
         st.error("スケジュールCSV と PREF.xlsx は必須です。")
         st.stop()
 
-    # 保存（PREF/SIM/prev は変換なし / CSV は UTF-8(BOM) に正規化した新規ファイルを作る）
-    sched_path, sched_note = _ensure_utf8_csv_path_from_upload(sched_up)
+    # ★ CSV は「混在エンコーディング補正 → CP932 正規化」してから run() に渡す
+    sched_path, sched_note = _ensure_cp932_csv_path_from_upload(sched_up)
+
+    # 他のファイルはバイナリのまま保存
     pref_path = _save_temp_from_upload(pref_up, ".xlsx")
     sim_path = _save_temp_from_upload(sim_up, ".xlsx") if sim_up else None
     prev_path = (
